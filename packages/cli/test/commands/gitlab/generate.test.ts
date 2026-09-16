@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
+import { PassThrough } from "node:stream";
 
-import { restoreGitlabHistory, upsertGitlabJobNote } from "@allurereport/ci";
+import { type GitlabCiDescriptor, detect, restoreGitlabHistory, upsertGitlabJobNote } from "@allurereport/ci";
 import { readConfig } from "@allurereport/core";
+import { CiType } from "@allurereport/core-api";
 import { run } from "clipanion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,169 +18,193 @@ vi.mock("@allurereport/core", () => ({
   readConfig: vi.fn(),
 }));
 vi.mock("@allurereport/ci", () => ({
-  restoreGitlabHistory: vi.fn().mockResolvedValue({ status: "skipped", reason: "gitlab unavailable" }),
-  upsertGitlabJobNote: vi.fn().mockResolvedValue({ status: "skipped", reason: "missing merge request" }),
+  detect: vi.fn(),
+  restoreGitlabHistory: vi.fn(),
+  upsertGitlabJobNote: vi.fn(),
 }));
 vi.mock("../../../src/commands/commons/generate.js", () => ({
   generate: vi.fn(),
 }));
 
-const output = "/tmp/allure-report";
+const artifactBaseUrl = "https://group.gitlab.io/-/project/-/jobs/123/artifacts";
+const gitlabCi: GitlabCiDescriptor = {
+  type: CiType.Gitlab,
+  detected: true,
+  repoName: "project",
+  jobUid: "1",
+  jobUrl: "https://gitlab.com/group/project/pipelines",
+  jobName: "project",
+  jobRunUid: "100",
+  jobRunUrl: "https://gitlab.com/group/project/-/pipelines/100",
+  jobRunName: "100",
+  jobRunBranch: "feature",
+  pullRequestName: "Feature",
+  pullRequestUrl: "https://gitlab.com/group/project/-/merge_requests/7",
+  projectId: "1",
+  projectPath: "group/project",
+  projectDirectory: "/tmp/project",
+  pipelineSource: "merge_request_event",
+  ciJobName: "generate-report",
+  currentJobId: "123",
+  currentJobUrl: "https://gitlab.com/group/project/-/jobs/123",
+  mergeRequestProjectId: "1",
+  restApiUrl: "https://gitlab.com/api/v4",
+  graphqlApiUrl: "https://gitlab.com/api/graphql",
+  ref: "feature",
+  jobArtifactsUrlBase: artifactBaseUrl,
+};
 const baseConfig = {
   name: "Allure Report",
-  output,
+  output: "/tmp/allure-report",
   historyPath: "/tmp/history.jsonl",
   historyLimit: 100,
-  historyBaseUrl: "https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report/",
+  historyBaseUrl: "https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report",
   open: false,
 };
-const runCommand = async (
-  commandClasses: typeof GitlabGenerateCommand,
-  argv: Array<string>,
-  output?: { stdout?: any; stderr?: any },
-): Promise<number> => {
-  return run(commandClasses, argv, {
-    stdout: output?.stdout || { write: vi.fn() },
-    stderr: output?.stderr || { write: vi.fn() },
-  } as never);
+const summary = {
+  name: "Allure Report",
+  duration: 42,
+  stats: { total: 1, passed: 1, failed: 0, broken: 0, skipped: 0, unknown: 0 },
+  newTests: 1,
+  flakyTests: 0,
+  retryTests: 0,
 };
+const runCommand = (argv: string[] = [], stdout = new PassThrough()) =>
+  run(GitlabGenerateCommand, ["gitlab", "generate", ...argv], { stdout, stderr: new PassThrough() });
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
+  vi.mocked(detect).mockReturnValue(gitlabCi);
   vi.mocked(existsSync).mockReturnValue(true);
   vi.mocked(readConfig).mockResolvedValue(baseConfig as never);
-  vi.mocked(generate).mockResolvedValue({
-    summary: {
-      name: "Allure Report",
-      duration: 42,
-      stats: { total: 1, passed: 1, failed: 0, broken: 0, skipped: 0, unknown: 0 },
-      newTests: 1,
-      flakyTests: 0,
-      retryTests: 0,
-    },
-  });
+  vi.mocked(restoreGitlabHistory).mockResolvedValue({ status: "ok" });
+  vi.mocked(generate).mockResolvedValue({ summary });
+  vi.mocked(upsertGitlabJobNote).mockResolvedValue({ status: "ok" });
 });
 
 describe("gitlab generate command", () => {
-  it("restores history before generation, snapshots summary, prints report URL, and posts after index exists", async () => {
-    const stdoutWrite = vi.fn();
-    vi.mocked(restoreGitlabHistory).mockImplementationOnce(async () => {
-      return { status: "ok" };
-    });
-    vi.mocked(generate).mockImplementationOnce(async () => {
-      return {
-        summary: {
-          name: "Allure Report",
-          duration: 42,
-          stats: { total: 1, passed: 1, failed: 0, broken: 0, skipped: 0, unknown: 0 },
-          newTests: 1,
-          flakyTests: 0,
-          retryTests: 0,
-        },
-      };
-    });
-    vi.mocked(upsertGitlabJobNote).mockImplementationOnce(async () => {
-      return { status: "ok" };
-    });
-    vi.mocked(existsSync).mockImplementation((path) => String(path) === "/tmp/allure-report/index.html");
+  it("includes the default output folder in historyBaseUrl, then restores, generates and posts in order", async () => {
+    const stdout = new PassThrough();
 
-    const exitCode = await runCommand(
-      GitlabGenerateCommand,
-      [
-        "gitlab",
-        "generate",
-        "--history-base-url",
-        "https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report/",
-        "--gitlab-token",
-        "token-from-cli",
-        "./results",
-      ],
-      {
-        stdout: { write: stdoutWrite } as never,
-      },
-    );
+    await expect(runCommand(["--gitlab-token", "token-from-cli", "./results"], stdout)).resolves.toBe(0);
 
-    expect(exitCode).toBe(0);
+    expect(readConfig).toHaveBeenCalledWith(expect.any(String), undefined, {
+      name: undefined,
+      output: "allure-report",
+      historyPath: "history.jsonl",
+      historyLimit: 100,
+      historyBaseUrl: "https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report",
+    });
     expect(restoreGitlabHistory).toHaveBeenCalledWith(
-      expect.objectContaining({ token: "token-from-cli", historyPath: "/tmp/history.jsonl" }),
+      expect.objectContaining({ token: "token-from-cli", historyPath: "history.jsonl" }),
     );
     expect(generate).toHaveBeenCalledWith(
       expect.objectContaining({ collectSummary: true, resultsDir: ["./results"], config: baseConfig }),
     );
-    expect(stdoutWrite).toHaveBeenCalledWith(
-      expect.stringContaining("https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report/index.html"),
-    );
+    expect(existsSync).toHaveBeenCalledWith("/tmp/allure-report/index.html");
     expect(upsertGitlabJobNote).toHaveBeenCalledWith(
       expect.objectContaining({
         token: "token-from-cli",
         reportUrl: "https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report/index.html",
-        summary: expect.objectContaining({ newTests: 1 }),
+        summary,
       }),
+    );
+    expect(stdout.read()?.toString()).toContain(
+      "GitLab report URL: https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report/index.html",
+    );
+    expect(vi.mocked(restoreGitlabHistory).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(generate).mock.invocationCallOrder[0],
+    );
+    expect(vi.mocked(generate).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(upsertGitlabJobNote).mock.invocationCallOrder[0],
     );
   });
 
-  it("lets config values win over command defaults and lets explicit CLI values win over config", async () => {
-    await runCommand(GitlabGenerateCommand, [
-      "gitlab",
-      "generate",
-      "--output",
-      "cli-report",
-      "--report-name",
-      "CLI Name",
-      "--history-path",
-      "cli-history.jsonl",
-      "--history-limit",
-      "7",
-      "--history-base-url",
-      "https://example.test/reports/7",
-    ]);
+  it("preserves an explicit historyBaseUrl without appending the output folder", async () => {
+    const config = {
+      ...baseConfig,
+      name: "CLI Name",
+      output: "/tmp/reports/cli-report",
+      historyPath: "/tmp/cli-history.jsonl",
+      historyLimit: 7,
+      historyBaseUrl: "https://reports.example.test/runs/7",
+    };
+    vi.mocked(readConfig).mockResolvedValueOnce(config as never);
+    const stdout = new PassThrough();
+
+    await expect(
+      runCommand(
+        [
+          "--output",
+          "reports/cli-report",
+          "--report-name",
+          "CLI Name",
+          "--history-path",
+          "cli-history.jsonl",
+          "--history-limit",
+          "7",
+          "--history-base-url",
+          "https://reports.example.test/runs/7",
+        ],
+        stdout,
+      ),
+    ).resolves.toBe(0);
 
     expect(readConfig).toHaveBeenCalledWith(expect.any(String), undefined, {
       name: "CLI Name",
-      output: "cli-report",
-      historyBaseUrl: "https://example.test/reports/7/",
+      output: "reports/cli-report",
       historyPath: "cli-history.jsonl",
       historyLimit: 7,
+      historyBaseUrl: "https://reports.example.test/runs/7",
     });
-
-    vi.mocked(readConfig).mockClear();
-    vi.mocked(readConfig).mockResolvedValueOnce({
-      ...baseConfig,
-      output: "/tmp/config-report",
-      historyPath: "/tmp/config-history.jsonl",
-      historyLimit: 4,
-      historyBaseUrl: "https://example.test/config/",
-    } as never);
-
-    await runCommand(GitlabGenerateCommand, ["gitlab", "generate"]);
-
-    expect(readConfig).toHaveBeenCalledWith(expect.any(String), undefined, {
-      name: undefined,
-      output: undefined,
-      historyBaseUrl: undefined,
-      historyPath: undefined,
-      historyLimit: undefined,
-    });
-    expect(restoreGitlabHistory).toHaveBeenLastCalledWith(
-      expect.objectContaining({ historyPath: "/tmp/config-history.jsonl" }),
+    expect(restoreGitlabHistory).toHaveBeenCalledWith(expect.objectContaining({ historyPath: "cli-history.jsonl" }));
+    expect(generate).toHaveBeenCalledWith(expect.objectContaining({ config }));
+    expect(existsSync).toHaveBeenCalledWith("/tmp/reports/cli-report/index.html");
+    expect(upsertGitlabJobNote).toHaveBeenCalledWith(
+      expect.objectContaining({ reportUrl: "https://reports.example.test/runs/7/index.html" }),
     );
+    expect(stdout.read()?.toString()).toContain("https://reports.example.test/runs/7/index.html");
   });
 
-  it("preserves results and dump options without replacing configured native renderers", async () => {
-    vi.mocked(readConfig).mockResolvedValueOnce({
-      ...baseConfig,
-      plugins: [{ id: "classic", enabled: true, plugin: {}, options: {} }],
-    } as never);
+  it.each([
+    { name: "an existing config file", exists: true, expected: "custom.mjs" },
+    { name: "a missing config file", exists: false, expected: undefined },
+  ])("resolves $name through readConfig", async ({ exists, expected }) => {
+    vi.mocked(existsSync).mockImplementation((path) => String(path) !== "custom.mjs" || exists);
 
-    await runCommand(GitlabGenerateCommand, [
-      "gitlab",
-      "generate",
-      "--history-base-url",
-      "https://example.test/report/",
-      "--dump",
-      "dump.zip",
-      "./results",
-    ]);
+    await expect(runCommand(["--config", "custom.mjs"])).resolves.toBe(0);
+
+    expect(readConfig).toHaveBeenCalledWith(expect.any(String), expected, expect.any(Object));
+    expect(generate).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { value: "0", expected: 0 },
+    { value: "7", expected: 7 },
+    { value: "bad", expected: 100 },
+    { value: "-1", expected: 100 },
+    { value: "1.5", expected: 100 },
+    { value: "1e309", expected: 100 },
+  ])("passes history limit $value as $expected instead of rejecting the command", async ({ value, expected }) => {
+    await expect(runCommand([`--history-limit=${value}`])).resolves.toBe(0);
+
+    expect(readConfig).toHaveBeenCalledWith(
+      expect.any(String),
+      undefined,
+      expect.objectContaining({ historyLimit: expected }),
+    );
+    expect(generate).toHaveBeenCalledOnce();
+  });
+
+  it("preserves results, dump inputs and resolved renderer settings", async () => {
+    const config = {
+      ...baseConfig,
+      appendHistory: false,
+      plugins: [{ id: "classic", enabled: true, plugin: {}, options: {} }],
+    };
+    vi.mocked(readConfig).mockResolvedValueOnce(config as never);
+
+    await expect(runCommand(["--dump", "dump.zip", "./results"])).resolves.toBe(0);
 
     expect(readConfig).toHaveBeenCalledWith(
       expect.any(String),
@@ -186,156 +212,55 @@ describe("gitlab generate command", () => {
       expect.not.objectContaining({ plugins: expect.anything() }),
     );
     expect(generate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dump: ["dump.zip"],
-        resultsDir: ["./results"],
-        config: expect.objectContaining({ plugins: [expect.objectContaining({ id: "classic" })] }),
-      }),
+      expect.objectContaining({ dump: ["dump.zip"], resultsDir: ["./results"], config }),
     );
   });
 
-  it("does not post a note when generation fails", async () => {
+  it.each([
+    { name: "without a URL override", args: [] },
+    { name: "with a URL override", args: ["--history-base-url", "https://reports.example.test/run"] },
+  ])("requires GitLab CI $name before reading config or generating", async ({ args }) => {
+    vi.mocked(detect).mockReturnValue({ ...gitlabCi, type: CiType.Local });
+    const stdout = new PassThrough();
+
+    await expect(runCommand(args, stdout)).resolves.toBe(1);
+
+    expect(stdout.read()?.toString()).toContain("GitLab CI environment was not detected");
+    expect(readConfig).not.toHaveBeenCalled();
+    expect(restoreGitlabHistory).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+    expect(upsertGitlabJobNote).not.toHaveBeenCalled();
+  });
+
+  it("does not print a report link or post a note when generation does not complete", async () => {
     vi.mocked(generate).mockResolvedValueOnce(undefined);
+    const stdout = new PassThrough();
 
-    await runCommand(GitlabGenerateCommand, [
-      "gitlab",
-      "generate",
-      "--history-base-url",
-      "https://example.test/report/",
-    ]);
+    await expect(runCommand([], stdout)).resolves.toBe(0);
 
+    expect(generate).toHaveBeenCalledOnce();
+    expect(stdout.read()).toBeNull();
     expect(upsertGitlabJobNote).not.toHaveBeenCalled();
   });
 
-  it("does not post a note when generation omits summary", async () => {
+  it("prints the report link but does not post a note when generation omits the summary", async () => {
     vi.mocked(generate).mockResolvedValueOnce({});
+    const stdout = new PassThrough();
 
-    await runCommand(GitlabGenerateCommand, [
-      "gitlab",
-      "generate",
-      "--history-base-url",
-      "https://example.test/report/",
-    ]);
+    await expect(runCommand([], stdout)).resolves.toBe(0);
 
+    expect(generate).toHaveBeenCalledOnce();
+    expect(stdout.read()?.toString()).toContain("GitLab report URL:");
     expect(upsertGitlabJobNote).not.toHaveBeenCalled();
   });
 
-  it("does not post a note when the report entry point is absent", async () => {
+  it("does not post a note when the generated report entry point is absent", async () => {
     vi.mocked(existsSync).mockReturnValue(false);
 
-    await runCommand(GitlabGenerateCommand, [
-      "gitlab",
-      "generate",
-      "--history-base-url",
-      "https://example.test/report/",
-    ]);
+    await expect(runCommand()).resolves.toBe(0);
 
+    expect(generate).toHaveBeenCalledOnce();
+    expect(existsSync).toHaveBeenCalledWith("/tmp/allure-report/index.html");
     expect(upsertGitlabJobNote).not.toHaveBeenCalled();
-  });
-
-  it("rejects invalid command configuration before GitLab or generation work", async () => {
-    const stderr: string[] = [];
-    const runInvalidCommand = async (args: string[]) =>
-      await runCommand(GitlabGenerateCommand, args, {
-        stderr: { write: (chunk: string) => stderr.push(chunk) },
-      });
-
-    await expect(
-      runInvalidCommand([
-        "gitlab",
-        "generate",
-        "--history-limit",
-        "bad",
-        "--history-base-url",
-        "https://example.test/report/",
-      ]),
-    ).resolves.toBe(1);
-    await expect(
-      runInvalidCommand([
-        "gitlab",
-        "generate",
-        "--history-limit",
-        "1".padEnd(400, "0"),
-        "--history-base-url",
-        "https://example.test/report/",
-      ]),
-    ).resolves.toBe(1);
-    await expect(
-      runInvalidCommand(["gitlab", "generate", "--history-base-url", "ftp://example.test/report/"]),
-    ).resolves.toBe(1);
-    await expect(
-      runInvalidCommand(["gitlab", "generate", "--history-base-url", "https://user:pass@example.test/report/"]),
-    ).resolves.toBe(1);
-
-    vi.mocked(existsSync).mockReturnValue(false);
-    await expect(
-      runInvalidCommand([
-        "gitlab",
-        "generate",
-        "--config",
-        "missing.mjs",
-        "--history-base-url",
-        "https://example.test/report/",
-      ]),
-    ).resolves.toBe(1);
-
-    expect(stderr.join("")).toContain("Invalid history limit: bad");
-    expect(stderr.join("")).toContain("Invalid history limit: 1");
-    expect(stderr.join("")).toContain("history base URL must use HTTP or HTTPS");
-    expect(stderr.join("")).toContain("history base URL must not contain credentials");
-    expect(stderr.join("")).toContain("Config file not found: missing.mjs");
-    expect(restoreGitlabHistory).not.toHaveBeenCalled();
-    expect(generate).not.toHaveBeenCalled();
-  });
-
-  it("rejects invalid configured history limits before GitLab or generation work", async () => {
-    const stderr: string[] = [];
-    vi.mocked(readConfig).mockResolvedValueOnce({
-      ...baseConfig,
-      historyLimit: "bad",
-    } as never);
-
-    await expect(
-      runCommand(GitlabGenerateCommand, ["gitlab", "generate"], {
-        stderr: { write: (chunk: string) => stderr.push(chunk) },
-      }),
-    ).resolves.toBe(1);
-
-    expect(stderr.join("")).toContain("Invalid history limit: bad");
-    expect(restoreGitlabHistory).not.toHaveBeenCalled();
-    expect(generate).not.toHaveBeenCalled();
-  });
-
-  it("accepts zero as the effective history limit", async () => {
-    vi.mocked(readConfig).mockResolvedValueOnce({
-      ...baseConfig,
-      historyLimit: 0,
-    } as never);
-
-    await expect(runCommand(GitlabGenerateCommand, ["gitlab", "generate"])).resolves.toBe(0);
-
-    expect(generate).toHaveBeenCalledWith(
-      expect.objectContaining({ config: expect.objectContaining({ historyLimit: 0 }) }),
-    );
-  });
-
-  it("rejects remote Allure service publishing configuration for local artifact generation", async () => {
-    const stderr: string[] = [];
-    vi.mocked(readConfig).mockResolvedValueOnce({
-      ...baseConfig,
-      allureService: { endpoint: "https://allure.example" },
-    } as never);
-
-    await expect(
-      runCommand(GitlabGenerateCommand, ["gitlab", "generate", "--history-base-url", "https://example.test/report/"], {
-        stderr: { write: (chunk: string) => stderr.push(chunk) } as never,
-      }),
-    ).resolves.toBe(1);
-
-    expect(stderr.join("")).toContain(
-      "GitLab artifact generation cannot be combined with Allure service publishing configuration",
-    );
-    expect(restoreGitlabHistory).not.toHaveBeenCalled();
-    expect(generate).not.toHaveBeenCalled();
   });
 });

@@ -81,17 +81,43 @@ const withEnv = (values: Record<string, string>) => {
 describe("gitlab generate integration", () => {
   let tempDir: string;
   let restoreEnv: (() => void) | undefined;
+  let restoreBaseEnv: (() => void) | undefined;
   let originalCwd: string;
 
   beforeEach(async () => {
     originalCwd = process.cwd();
     tempDir = await mkdtemp(join(tmpdir(), "allure-gitlab-generate-"));
+    restoreBaseEnv = withEnv({
+      GITHUB_ACTIONS: "",
+      GITLAB_CI: "true",
+      CI_SERVER_URL: "https://gitlab.example.com",
+      CI_PAGES_DOMAIN: "",
+      CI_PROJECT_ROOT_NAMESPACE_SLUG: "group",
+      CI_PROJECT_NAME: "project",
+      CI_PROJECT_ID: "100",
+      CI_PROJECT_PATH: "group/project",
+      CI_PROJECT_DIR: tempDir,
+      CI_PIPELINE_ID: "10",
+      CI_PIPELINE_SOURCE: "merge_request_event",
+      CI_COMMIT_REF_NAME: "feature",
+      CI_MERGE_REQUEST_SOURCE_BRANCH_NAME: "feature",
+      CI_JOB_NAME: "generate-report",
+      CI_JOB_ID: "501",
+      CI_JOB_URL: "https://gitlab.example.com/group/project/-/jobs/501",
+      CI_MERGE_REQUEST_IID: "",
+      CI_MERGE_REQUEST_PROJECT_ID: "",
+      CI_API_V4_URL: "",
+      CI_API_GRAPHQL_URL: "",
+      GITLAB_TOKEN: "",
+    });
   });
 
   afterEach(async () => {
     process.chdir(originalCwd);
     restoreEnv?.();
+    restoreBaseEnv?.();
     restoreEnv = undefined;
+    restoreBaseEnv = undefined;
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -104,29 +130,27 @@ describe("gitlab generate integration", () => {
     await writeResult(firstResults, "beta", "failed", 20);
 
     const commandStderr: string[] = [];
-    const commandIo = { stderr: { write: (chunk: string) => commandStderr.push(chunk) } as never };
+    const commandStdout: string[] = [];
+    const commandIo = {
+      stdout: { write: (chunk: string) => commandStdout.push(chunk) } as never,
+      stderr: { write: (chunk: string) => commandStderr.push(chunk) } as never,
+    };
 
     process.chdir(tempDir);
     await expect(
       run(
         GitlabGenerateCommand,
-        [
-          "gitlab",
-          "generate",
-          "--output",
-          firstReport,
-          "--history-path",
-          firstHistory,
-          "--history-base-url",
-          "https://gitlab.example/group/project/-/jobs/500/artifacts/first-report/",
-          firstResults,
-        ],
+        ["gitlab", "generate", "--output", "first-report", "--history-path", "history.jsonl", firstResults],
         commandIo,
       ),
     ).resolves.toBe(0);
 
     expect(commandStderr.join("")).toContain("GitLab integration skipped: missing token");
     expect(commandStderr.join("")).toContain("GitLab summary note skipped: missing merge request");
+    expect(commandStdout.join("")).toContain(
+      "GitLab report URL: https://group.gitlab.io/-/project/-/jobs/501/artifacts/first-report/index.html",
+    );
+    await expect(readFile(join(firstReport, "index.html"), "utf-8")).resolves.toContain("Allure");
 
     const priorHistory = await readFile(firstHistory, "utf-8");
     await rm(firstHistory, { force: true });
@@ -249,17 +273,7 @@ describe("gitlab generate integration", () => {
       await expect(
         run(
           GitlabGenerateCommand,
-          [
-            "gitlab",
-            "generate",
-            "--output",
-            secondReport,
-            "--history-path",
-            secondHistory,
-            "--history-base-url",
-            `${serverBase}/group/project/-/jobs/700/artifacts/second-report/`,
-            secondResults,
-          ],
+          ["gitlab", "generate", "--output", "second-report", "--history-path", "history.jsonl", secondResults],
           commandIo,
         ),
       ).resolves.toBe(0);
@@ -268,7 +282,12 @@ describe("gitlab generate integration", () => {
     }
 
     await expect(readFile(join(secondReport, "index.html"), "utf-8")).resolves.toContain("Allure");
-    expect(await readJsonLines(secondHistory)).toHaveLength(2);
+    const historyPoints = await readJsonLines(secondHistory);
+    expect(historyPoints).toHaveLength(2);
+    expect(historyPoints.map(({ url }) => url).sort()).toEqual([
+      "https://group.gitlab.io/-/project/-/jobs/501/artifacts/first-report/index.html",
+      "https://group.gitlab.io/-/project/-/jobs/700/artifacts/second-report/index.html",
+    ]);
     expect(requests.filter(({ url }) => url === "/api/graphql")).toHaveLength(1);
     expect(requests.filter(({ url }) => url.includes("/artifacts/"))).toEqual([
       expect.objectContaining({ url: "/api/v4/projects/100/jobs/501/artifacts/history.jsonl" }),
@@ -282,13 +301,22 @@ describe("gitlab generate integration", () => {
     ).toHaveLength(1);
     expect(updatedBodies[0]).toContain("# Allure Report Summary");
     expect(updatedBodies[0]).toContain("| 1 | 0 | 0 | [View]");
-    expect(updatedBodies[0]).toContain(`${serverBase}/group/project/-/jobs/700/artifacts/second-report/index.html`);
+    expect(updatedBodies[0]).toContain(
+      "[View](https://group.gitlab.io/-/project/-/jobs/700/artifacts/second-report/index.html)",
+    );
+    expect(commandStdout.join("")).toContain(
+      "GitLab report URL: https://group.gitlab.io/-/project/-/jobs/700/artifacts/second-report/index.html",
+    );
   }, 120_000);
 
   it("does not fall back to an older artifact after the selected prior job returns 404", async () => {
     const requests: StubRequest[] = [];
     const commandStderr: string[] = [];
-    const commandIo = { stderr: { write: (chunk: string) => commandStderr.push(chunk) } as never };
+    const commandStdout: string[] = [];
+    const commandIo = {
+      stdout: { write: (chunk: string) => commandStdout.push(chunk) } as never,
+      stderr: { write: (chunk: string) => commandStderr.push(chunk) } as never,
+    };
     const server = createServer(async (request, response) => {
       const body = await readBody(request);
       requests.push({ method: request.method ?? "", url: request.url ?? "", body });
@@ -369,6 +397,7 @@ describe("gitlab generate integration", () => {
       CI_MERGE_REQUEST_SOURCE_BRANCH_NAME: "feature",
       CI_JOB_NAME: "generate-report",
       CI_JOB_ID: "700",
+      CI_JOB_URL: `${serverBase}/group/project/-/jobs/700`,
       CI_MERGE_REQUEST_IID: "5",
       CI_MERGE_REQUEST_PROJECT_ID: "100",
       CI_API_V4_URL: `${serverBase}/api/v4`,
@@ -385,11 +414,11 @@ describe("gitlab generate integration", () => {
             "gitlab",
             "generate",
             "--output",
-            report,
+            "report",
             "--history-path",
-            history,
+            "history.jsonl",
             "--history-base-url",
-            `${serverBase}/group/project/-/jobs/700/artifacts/report/`,
+            `${serverBase}/group/project/-/jobs/700/artifacts/report`,
             results,
           ],
           commandIo,
@@ -403,6 +432,19 @@ describe("gitlab generate integration", () => {
       expect.objectContaining({ url: "/api/v4/projects/100/jobs/501/artifacts/history.jsonl" }),
     ]);
     expect(commandStderr.join("")).toContain("GitLab history restore skipped: artifact download failed");
-    await expect(readJsonLines(history)).resolves.toHaveLength(1);
+    await expect(readJsonLines(history)).resolves.toEqual([
+      expect.objectContaining({ url: `${serverBase}/group/project/-/jobs/700/artifacts/report/index.html` }),
+    ]);
+    await expect(readFile(join(report, "index.html"), "utf-8")).resolves.toContain("Allure");
+    const notes = requests.filter(
+      ({ method, url }) => method === "POST" && url === "/api/v4/projects/100/merge_requests/5/notes",
+    );
+    expect(notes).toHaveLength(1);
+    expect(JSON.parse(notes[0].body).body).toContain(
+      `[View](${serverBase}/group/project/-/jobs/700/artifacts/report/index.html)`,
+    );
+    expect(commandStdout.join("")).toContain(
+      `GitLab report URL: ${serverBase}/group/project/-/jobs/700/artifacts/report/index.html`,
+    );
   }, 120_000);
 });

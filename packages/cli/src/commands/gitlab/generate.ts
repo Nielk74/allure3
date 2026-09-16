@@ -1,69 +1,44 @@
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { cwd as processCwd } from "node:process";
 
-import { restoreGitlabHistory, upsertGitlabJobNote } from "@allurereport/ci";
+import { restoreGitlabHistory, upsertGitlabJobNote, detect, GitlabCiDescriptor } from "@allurereport/ci";
 import { readConfig } from "@allurereport/core";
+import { CiDescriptor, CiType } from "@allurereport/core-api";
 import { Command, Option } from "clipanion";
-import { red } from "yoctocolors";
 
 import { generate } from "../commons/generate.js";
 
+const defaultHistoryLimit = 100;
 const isDecimalString = (value: string): boolean => /^[0-9]+$/.test(value);
 
 const parseHistoryLimit = (value: unknown): number | undefined => {
   if (typeof value === "string") {
     if (!isDecimalString(value)) {
-      return undefined;
+      return defaultHistoryLimit;
     }
 
     const parsed = Number(value);
 
-    return Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+    return Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 0 ? parsed : defaultHistoryLimit;
   }
 
   if (typeof value === "number") {
-    return Number.isFinite(value) && Number.isInteger(value) && value >= 0 ? value : undefined;
+    return Number.isFinite(value) && Number.isInteger(value) && value >= 0 ? value : defaultHistoryLimit;
   }
 
-  return undefined;
+  return defaultHistoryLimit;
 };
 
-const formatHistoryLimit = (value: unknown): string => (typeof value === "string" ? value : String(value));
+const reportBaseUrl = (historyBaseUrl: string | undefined, output: string): string => {
+  const gitlab = detect();
+  const isGitlabCiDescriptor = (ci: CiDescriptor): ci is GitlabCiDescriptor => ci.type === CiType.Gitlab;
 
-const normalizeReportDirectoryUrl = (value: string): { historyBaseUrl: string; reportUrl: string } => {
-  const trimmed = value.trim();
-
-  if (!trimmed) {
-    throw new Error("missing history base URL");
+  if (!isGitlabCiDescriptor(gitlab)) {
+    throw new Error("GitLab CI environment was not detected");
   }
 
-  let url: URL;
-
-  try {
-    url = new URL(trimmed);
-  } catch {
-    throw new Error("invalid history base URL");
-  }
-
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("history base URL must use HTTP or HTTPS");
-  }
-
-  if (url.username || url.password) {
-    throw new Error("history base URL must not contain credentials");
-  }
-
-  const directoryUrl = url.pathname.endsWith("/index.html") ? new URL("./", url) : url;
-
-  if (!directoryUrl.pathname.endsWith("/")) {
-    directoryUrl.pathname = `${directoryUrl.pathname}/`;
-  }
-
-  return {
-    historyBaseUrl: directoryUrl.toString(),
-    reportUrl: new URL("index.html", directoryUrl).toString(),
-  };
+  return historyBaseUrl || `${gitlab.jobArtifactsUrlBase}/${output}`;
 };
 
 export class GitlabGenerateCommand extends Command {
@@ -120,77 +95,16 @@ export class GitlabGenerateCommand extends Command {
 
   async execute() {
     const cwd = processCwd();
-
-    if (this.config && !existsSync(this.config)) {
-      this.context.stderr.write(`${red(`Config file not found: ${this.config}`)}\n`);
-
-      return 1;
-    }
-
-    const cliHistoryLimit = this.historyLimit === undefined ? undefined : parseHistoryLimit(this.historyLimit);
-
-    if (this.historyLimit !== undefined && cliHistoryLimit === undefined) {
-      this.context.stderr.write(`${red(`Invalid history limit: ${this.historyLimit}`)}\n`);
-
-      return 1;
-    }
-
-    let cliReportUrls: { historyBaseUrl: string; reportUrl: string } | undefined;
-
-    try {
-      cliReportUrls = this.historyBaseUrl === undefined ? undefined : normalizeReportDirectoryUrl(this.historyBaseUrl);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "invalid history base URL";
-      this.context.stderr.write(`${red(message)}\n`);
-
-      return 1;
-    }
-
-    const config = await readConfig(cwd, this.config, {
+    const output = this.output ?? "allure-report";
+    const configPath = this.config && existsSync(this.config) ? this.config : undefined;
+    const historyPath = this.historyPath === undefined ? "history.jsonl" : this.historyPath;
+    const config = await readConfig(cwd, configPath, {
+      output,
       name: this.reportName,
-      output: this.output,
-      historyBaseUrl: cliReportUrls?.historyBaseUrl,
-      historyPath: this.historyPath,
-      historyLimit: cliHistoryLimit,
+      historyPath: historyPath,
+      historyBaseUrl: reportBaseUrl(this.historyBaseUrl, output),
+      historyLimit: parseHistoryLimit(this.historyLimit),
     });
-
-    if (config.allureService) {
-      this.context.stderr.write(
-        `${red("GitLab artifact generation cannot be combined with Allure service publishing configuration")}\n`,
-      );
-
-      return 1;
-    }
-
-    const effectiveConfig = {
-      ...config,
-      historyPath: config.historyPath ?? resolve(cwd, "history.jsonl"),
-      historyLimit: config.historyLimit ?? 100,
-      historyBaseUrl: config.historyBaseUrl ?? cliReportUrls?.historyBaseUrl,
-    };
-    const effectiveHistoryLimit = parseHistoryLimit(effectiveConfig.historyLimit);
-
-    if (effectiveHistoryLimit === undefined) {
-      this.context.stderr.write(
-        `${red(`Invalid history limit: ${formatHistoryLimit(effectiveConfig.historyLimit)}`)}\n`,
-      );
-
-      return 1;
-    }
-
-    effectiveConfig.historyLimit = effectiveHistoryLimit;
-
-    let reportUrls: { historyBaseUrl: string; reportUrl: string };
-
-    try {
-      reportUrls = normalizeReportDirectoryUrl(effectiveConfig.historyBaseUrl ?? "");
-      effectiveConfig.historyBaseUrl = reportUrls.historyBaseUrl;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "invalid history base URL";
-      this.context.stderr.write(`${red(message)}\n`);
-
-      return 1;
-    }
 
     const warn = (message: string) => {
       this.context.stderr.write(`${message}\n`);
@@ -198,15 +112,15 @@ export class GitlabGenerateCommand extends Command {
 
     await restoreGitlabHistory({
       token: this.gitlabToken,
+      historyPath,
       warn,
-      historyPath: effectiveConfig.historyPath,
     });
 
     const result = await generate({
+      cwd,
+      config,
       dump: this.dump,
       resultsDir: this.resultsDir,
-      cwd,
-      config: effectiveConfig,
       collectSummary: true,
     });
 
@@ -214,14 +128,15 @@ export class GitlabGenerateCommand extends Command {
       return;
     }
 
-    this.context.stdout.write(`GitLab report URL: ${reportUrls.reportUrl}\n`);
+    const reportUrl = `${config.historyBaseUrl}/index.html`;
+    this.context.stdout.write(`GitLab report URL: ${reportUrl}\n`);
 
-    if (result.summary && existsSync(join(effectiveConfig.output, "index.html"))) {
+    if (result.summary && existsSync(join(config.output, "index.html"))) {
       await upsertGitlabJobNote({
         token: this.gitlabToken,
         warn,
         summary: result.summary,
-        reportUrl: reportUrls.reportUrl,
+        reportUrl: reportUrl,
       });
     }
   }

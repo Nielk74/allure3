@@ -39,6 +39,7 @@ export type GitlabCiDescriptor = CiDescriptor & {
   restApiUrl: string;
   graphqlApiUrl: string;
   ref: string;
+  jobArtifactsUrlBase: string;
 };
 
 export const gitlab: GitlabCiDescriptor = {
@@ -173,5 +174,12 @@ export const gitlab: GitlabCiDescriptor = {
 
   get ref(): string {
     return getSourceRef() || "";
+  },
+
+  get jobArtifactsUrlBase(): string {
+    return (
+      `${new URL(getServerUrl()).protocol}//${getEnv("CI_PROJECT_ROOT_NAMESPACE_SLUG")}.${getEnv("CI_PAGES_DOMAIN") || "gitlab.io"}` +
+      `/-/${getEnv("CI_PROJECT_NAME")}/-/jobs/${this.currentJobId}/artifacts`
+    );
   },
 };

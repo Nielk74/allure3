@@ -279,6 +279,35 @@ describe("gitlab", () => {
     });
   });
 
+  describe("jobArtifactsUrlBase", () => {
+    it.each([
+      {
+        name: "GitLab.com defaults",
+        env: {},
+        expected: "https://myorg.gitlab.io/-/myrepo/-/jobs/678/artifacts",
+      },
+      {
+        name: "a custom Pages domain",
+        env: { CI_SERVER_URL: "https://gitlab.example.com/gitlab/", CI_PAGES_DOMAIN: "pages.example.com" },
+        expected: "https://myorg.pages.example.com/-/myrepo/-/jobs/678/artifacts",
+      },
+      {
+        name: "an HTTP self-managed instance",
+        env: { CI_SERVER_URL: "http://gitlab.example.com", CI_PAGES_DOMAIN: "pages.example.com" },
+        expected: "http://myorg.pages.example.com/-/myrepo/-/jobs/678/artifacts",
+      },
+    ])("should build the artifact preview base for $name", ({ env, expected }) => {
+      mockEnv({
+        CI_PROJECT_ROOT_NAMESPACE_SLUG: "myorg",
+        CI_PROJECT_NAME: "myrepo",
+        CI_JOB_ID: "678",
+        ...env,
+      });
+
+      expect(gitlab.jobArtifactsUrlBase).toBe(expected);
+    });
+  });
+
   describe("GitLab integration metadata", () => {
     it("should expose non-secret project, job, merge request, and endpoint fields", () => {
       mockEnv({

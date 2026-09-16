@@ -5,7 +5,7 @@ import { cwd as processCwd } from "node:process";
 import { restoreGitlabHistory, upsertGitlabJobNote, detect, GitlabCiDescriptor } from "@allurereport/ci";
 import { readConfig } from "@allurereport/core";
 import { CiDescriptor, CiType } from "@allurereport/core-api";
-import { Command, Option } from "clipanion";
+import { BaseContext, Command, Option } from "clipanion";
 
 import { generate } from "../commons/generate.js";
 
@@ -50,6 +50,14 @@ const reportBaseUrl = (historyBaseUrl: string | undefined, output: string): stri
   }
 
   return historyBaseUrl || `${gitlab.jobArtifactsUrlBase}/${output}`;
+};
+
+const log = (msg: string, context: BaseContext) => {
+  context.stdout.write(msg + "\n");
+};
+
+const err = (msg: string, context: BaseContext) => {
+  context.stderr.write(msg + "\n");
 };
 
 export class GitlabGenerateCommand extends Command {
@@ -116,16 +124,17 @@ export class GitlabGenerateCommand extends Command {
       historyBaseUrl: reportBaseUrl(this.historyBaseUrl, output),
       historyLimit: parseHistoryLimit(this.historyLimit),
     });
-
-    const runGitlabOperation = async (operation: () => Promise<void>) => {
+    const runGitlabOperation = async (errPrefix: string, operation: () => Promise<void>) => {
       try {
         await operation();
       } catch (error) {
-        this.context.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        err(`${errPrefix}: ${error instanceof Error ? error.message : String(error)}`, this.context);
       }
     };
 
-    await runGitlabOperation(() =>
+    log("Generating allure report", this.context);
+    log(" fetching previous run history", this.context);
+    await runGitlabOperation("  history fetch failed", () =>
       restoreGitlabHistory({
         token: this.gitlabToken,
         historyPath,
@@ -145,11 +154,12 @@ export class GitlabGenerateCommand extends Command {
     }
 
     const reportUrl = `${config.historyBaseUrl}/index.html`;
-    this.context.stdout.write(`GitLab report URL: ${reportUrl}\n`);
+    log(`GitLab report URL: ${reportUrl}`, this.context);
 
     if (result.summary && existsSync(join(config.output, "index.html"))) {
       const { summary } = result;
-      await runGitlabOperation(() =>
+      log(" adding test report summary comment", this.context);
+      await runGitlabOperation("  failed to add summary comment", () =>
         upsertGitlabJobNote({
           token: this.gitlabToken,
           summary,

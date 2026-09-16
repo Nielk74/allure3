@@ -217,10 +217,12 @@ describe("gitlab generate command", () => {
 
     await expect(runCommand([], stdout, stderr)).resolves.toBe(0);
 
-    expect(stderr.read()?.toString()).toBe(warning);
+    const output = stdout.read()?.toString() ?? "";
+    expect((stderr.read()?.toString() ?? "").split(warning)).toHaveLength(2);
+    expect(output).not.toContain(warning);
     expect(generate).toHaveBeenCalledOnce();
     expect(upsertGitlabJobNote).toHaveBeenCalledOnce();
-    expect(stdout.read()?.toString()).toContain("GitLab report URL:");
+    expect(output).toContain("GitLab report URL:");
   });
 
   it.each([
@@ -308,7 +310,7 @@ describe("gitlab generate command", () => {
     await expect(runCommand([], stdout)).resolves.toBe(0);
 
     expect(generate).toHaveBeenCalledOnce();
-    expect(stdout.read()).toBeNull();
+    expect(stdout.read()?.toString() ?? "").not.toContain("GitLab report URL:");
     expect(upsertGitlabJobNote).not.toHaveBeenCalled();
   });
 

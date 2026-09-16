@@ -258,12 +258,15 @@ describe("gitlab generate integration", () => {
           ),
         ).resolves.toBe(0);
 
-        expect(commandStderr).toEqual(["no matching prior job in returned pipeline window\n", "missing API token\n"]);
+        expect(commandStderr).toHaveLength(2);
+        expect(commandStderr.join("")).toContain("no matching prior job in returned pipeline window\n");
+        expect(commandStderr.join("")).toContain("missing API token\n");
         expect(requests.map(({ headers }) => headers?.["private-token"])).toEqual([undefined]);
         expect(commandStdout.join("")).toContain(
           "GitLab report URL: https://group.gitlab.io/-/project/-/jobs/501/artifacts/first-report/index.html",
         );
         await expect(readFile(join(firstReport, "index.html"), "utf-8")).resolves.toContain("Allure");
+        commandStdout.length = 0;
         commandStderr.length = 0;
         priorHistory = await readFile(firstHistory, "utf-8");
         await rm(firstHistory, { force: true });
@@ -326,7 +329,8 @@ describe("gitlab generate integration", () => {
       } else {
         expect(updatedBodies).toEqual([]);
         expect(requests.filter(({ url }) => url.includes("/notes"))).toEqual([]);
-        expect(commandStderr).toEqual(["missing API token\n"]);
+        expect(commandStderr).toHaveLength(1);
+        expect(commandStderr.join("")).toContain("missing API token\n");
       }
       expect(commandStdout.join("")).toContain(
         "GitLab report URL: https://group.gitlab.io/-/project/-/jobs/700/artifacts/second-report/index.html",
@@ -457,7 +461,8 @@ describe("gitlab generate integration", () => {
     expect(requests.filter(({ url }) => url.includes("/artifacts/"))).toEqual([
       expect.objectContaining({ url: "/api/v4/projects/100/jobs/501/artifacts/history.jsonl" }),
     ]);
-    expect(commandStderr).toEqual(["GitLab artifact request failed\n"]);
+    expect(commandStderr).toHaveLength(1);
+    expect(commandStderr.join("")).toContain("GitLab artifact request failed\n");
     await expect(readJsonLines(history)).resolves.toEqual([
       expect.objectContaining({ url: `${serverBase}/group/project/-/jobs/700/artifacts/report/index.html` }),
     ]);

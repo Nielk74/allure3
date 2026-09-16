@@ -109,7 +109,7 @@ export class GitlabGenerateCommand extends Command {
   });
 
   gitlabToken = Option.String("--gitlab-token", {
-    description: "GitLab api token with api write access",
+    description: "GitLab api token with api write permissions",
   });
 
   async execute() {

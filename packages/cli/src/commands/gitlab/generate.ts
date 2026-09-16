@@ -134,7 +134,7 @@ export class GitlabGenerateCommand extends Command {
     };
 
     log("Generating allure report", this.context);
-    log(" fetching previous run history", this.context);
+    log("  fetching previous run history", this.context);
     await runGitlabOperation("  history fetch failed", () =>
       restoreGitlabHistory({
         token,

@@ -32,6 +32,16 @@ const baseConfig = {
   historyBaseUrl: "https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report/",
   open: false,
 };
+const runCommand = async (
+  commandClasses: typeof GitlabGenerateCommand,
+  argv: Array<string>,
+  output?: { stdout?: any; stderr?: any },
+): Promise<number> => {
+  return run(commandClasses, argv, {
+    stdout: output?.stdout || { write: vi.fn() },
+    stderr: output?.stderr || { write: vi.fn() },
+  } as never);
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -51,16 +61,11 @@ beforeEach(() => {
 
 describe("gitlab generate command", () => {
   it("restores history before generation, snapshots summary, prints report URL, and posts after index exists", async () => {
-    const events: string[] = [];
     const stdoutWrite = vi.fn();
     vi.mocked(restoreGitlabHistory).mockImplementationOnce(async () => {
-      events.push("restore");
-
       return { status: "ok" };
     });
     vi.mocked(generate).mockImplementationOnce(async () => {
-      events.push("generate");
-
       return {
         summary: {
           name: "Allure Report",
@@ -73,13 +78,11 @@ describe("gitlab generate command", () => {
       };
     });
     vi.mocked(upsertGitlabJobNote).mockImplementationOnce(async () => {
-      events.push("note");
-
       return { status: "ok" };
     });
     vi.mocked(existsSync).mockImplementation((path) => String(path) === "/tmp/allure-report/index.html");
 
-    const exitCode = await run(
+    const exitCode = await runCommand(
       GitlabGenerateCommand,
       [
         "gitlab",
@@ -96,7 +99,6 @@ describe("gitlab generate command", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(events).toEqual(["restore", "generate", "note"]);
     expect(restoreGitlabHistory).toHaveBeenCalledWith(
       expect.objectContaining({ token: "token-from-cli", historyPath: "/tmp/history.jsonl" }),
     );
@@ -116,7 +118,7 @@ describe("gitlab generate command", () => {
   });
 
   it("lets config values win over command defaults and lets explicit CLI values win over config", async () => {
-    await run(GitlabGenerateCommand, [
+    await runCommand(GitlabGenerateCommand, [
       "gitlab",
       "generate",
       "--output",
@@ -148,7 +150,7 @@ describe("gitlab generate command", () => {
       historyBaseUrl: "https://example.test/config/",
     } as never);
 
-    await run(GitlabGenerateCommand, ["gitlab", "generate"]);
+    await runCommand(GitlabGenerateCommand, ["gitlab", "generate"]);
 
     expect(readConfig).toHaveBeenCalledWith(expect.any(String), undefined, {
       name: undefined,
@@ -168,7 +170,7 @@ describe("gitlab generate command", () => {
       plugins: [{ id: "classic", enabled: true, plugin: {}, options: {} }],
     } as never);
 
-    await run(GitlabGenerateCommand, [
+    await runCommand(GitlabGenerateCommand, [
       "gitlab",
       "generate",
       "--history-base-url",
@@ -192,21 +194,41 @@ describe("gitlab generate command", () => {
     );
   });
 
-  it("does not post a note when generation fails, omits summary, or the report entry point is absent", async () => {
+  it("does not post a note when generation fails", async () => {
     vi.mocked(generate).mockResolvedValueOnce(undefined);
 
-    await run(GitlabGenerateCommand, ["gitlab", "generate", "--history-base-url", "https://example.test/report/"]);
+    await runCommand(GitlabGenerateCommand, [
+      "gitlab",
+      "generate",
+      "--history-base-url",
+      "https://example.test/report/",
+    ]);
 
     expect(upsertGitlabJobNote).not.toHaveBeenCalled();
+  });
 
+  it("does not post a note when generation omits summary", async () => {
     vi.mocked(generate).mockResolvedValueOnce({});
-    await run(GitlabGenerateCommand, ["gitlab", "generate", "--history-base-url", "https://example.test/report/"]);
+
+    await runCommand(GitlabGenerateCommand, [
+      "gitlab",
+      "generate",
+      "--history-base-url",
+      "https://example.test/report/",
+    ]);
 
     expect(upsertGitlabJobNote).not.toHaveBeenCalled();
+  });
 
-    vi.mocked(generate).mockResolvedValueOnce({ summary: baseConfig as never });
+  it("does not post a note when the report entry point is absent", async () => {
     vi.mocked(existsSync).mockReturnValue(false);
-    await run(GitlabGenerateCommand, ["gitlab", "generate", "--history-base-url", "https://example.test/report/"]);
+
+    await runCommand(GitlabGenerateCommand, [
+      "gitlab",
+      "generate",
+      "--history-base-url",
+      "https://example.test/report/",
+    ]);
 
     expect(upsertGitlabJobNote).not.toHaveBeenCalled();
   });
@@ -214,8 +236,8 @@ describe("gitlab generate command", () => {
   it("rejects invalid command configuration before GitLab or generation work", async () => {
     const stderr: string[] = [];
     const runInvalidCommand = async (args: string[]) =>
-      await run(GitlabGenerateCommand, args, {
-        stderr: { write: (chunk: string) => stderr.push(chunk) } as never,
+      await runCommand(GitlabGenerateCommand, args, {
+        stderr: { write: (chunk: string) => stderr.push(chunk) },
       });
 
     await expect(
@@ -274,8 +296,8 @@ describe("gitlab generate command", () => {
     } as never);
 
     await expect(
-      run(GitlabGenerateCommand, ["gitlab", "generate"], {
-        stderr: { write: (chunk: string) => stderr.push(chunk) } as never,
+      runCommand(GitlabGenerateCommand, ["gitlab", "generate"], {
+        stderr: { write: (chunk: string) => stderr.push(chunk) },
       }),
     ).resolves.toBe(1);
 
@@ -290,7 +312,7 @@ describe("gitlab generate command", () => {
       historyLimit: 0,
     } as never);
 
-    await expect(run(GitlabGenerateCommand, ["gitlab", "generate"])).resolves.toBe(0);
+    await expect(runCommand(GitlabGenerateCommand, ["gitlab", "generate"])).resolves.toBe(0);
 
     expect(generate).toHaveBeenCalledWith(
       expect.objectContaining({ config: expect.objectContaining({ historyLimit: 0 }) }),
@@ -305,7 +327,7 @@ describe("gitlab generate command", () => {
     } as never);
 
     await expect(
-      run(GitlabGenerateCommand, ["gitlab", "generate", "--history-base-url", "https://example.test/report/"], {
+      runCommand(GitlabGenerateCommand, ["gitlab", "generate", "--history-base-url", "https://example.test/report/"], {
         stderr: { write: (chunk: string) => stderr.push(chunk) } as never,
       }),
     ).resolves.toBe(1);

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { cwd as processCwd } from "node:process";
 
 import { restoreGitlabHistory, upsertGitlabJobNote, detect, GitlabCiDescriptor } from "@allurereport/ci";
@@ -36,6 +36,17 @@ const reportBaseUrl = (historyBaseUrl: string | undefined, output: string): stri
 
   if (!isGitlabCiDescriptor(gitlab)) {
     throw new Error("GitLab CI environment was not detected");
+  }
+
+  if (isAbsolute(output)) {
+    const projectDirectory = resolve(gitlab.projectDirectory);
+    const absoluteOutput = resolve(output);
+
+    if (absoluteOutput !== projectDirectory && !absoluteOutput.startsWith(join(projectDirectory, sep))) {
+      throw new Error("Absolute output path must be within CI_PROJECT_DIR");
+    }
+
+    output = relative(projectDirectory, absoluteOutput).split(sep).join("/");
   }
 
   return historyBaseUrl || `${gitlab.jobArtifactsUrlBase}/${output}`;

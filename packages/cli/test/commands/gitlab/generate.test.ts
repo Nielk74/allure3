@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { type GitlabCiDescriptor, detect, restoreGitlabHistory, upsertGitlabJobNote } from "@allurereport/ci";
@@ -117,6 +118,35 @@ describe("gitlab generate command", () => {
     expect(vi.mocked(generate).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(upsertGitlabJobNote).mock.invocationCallOrder[0],
     );
+  });
+
+  it.each([
+    { name: "relative", output: "reports/cli-report" },
+    { name: "absolute within CI_PROJECT_DIR", output: resolve(gitlabCi.projectDirectory, "reports/cli-report") },
+  ])("builds the default historyBaseUrl for $name output path", async ({ output }) => {
+    await expect(runCommand(["--output", output])).resolves.toBe(0);
+
+    expect(readConfig).toHaveBeenCalledWith(
+      expect.any(String),
+      undefined,
+      expect.objectContaining({
+        output,
+        historyBaseUrl: "https://group.gitlab.io/-/project/-/jobs/123/artifacts/reports/cli-report",
+      }),
+    );
+  });
+
+  it("rejects an absolute output path outside CI_PROJECT_DIR before generation", async () => {
+    const stdout = new PassThrough();
+    const output = resolve(`${gitlabCi.projectDirectory}-outside`, "report");
+
+    await expect(runCommand(["--output", output], stdout)).resolves.toBe(1);
+
+    expect(stdout.read()?.toString()).toContain("Absolute output path must be within CI_PROJECT_DIR");
+    expect(readConfig).not.toHaveBeenCalled();
+    expect(restoreGitlabHistory).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+    expect(upsertGitlabJobNote).not.toHaveBeenCalled();
   });
 
   it("preserves an explicit historyBaseUrl without appending the output folder", async () => {

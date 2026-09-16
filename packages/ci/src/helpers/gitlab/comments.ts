@@ -1,17 +1,11 @@
 import { gitlab } from "../../detectors/gitlab.js";
-import { createGitlabClient, type GitlabClient } from "./client.js";
-import type { GitlabIntegrationOptions, GitlabOperationResult, GitlabReportSummary } from "./types.js";
+import { createGitlabClient, resolveToken, type GitlabClient } from "./client.js";
+import type { GitlabIntegrationOptions, GitlabReportSummary } from "./types.js";
 
 const MARKER_VERSION = "v1";
 const MAX_NOTE_SCAN_PAGES = 5;
 const NOTE_PAGE_SIZE = 100;
 const MAX_COMMENT_LENGTH = 60_000;
-
-const skipped = (reason: string): GitlabOperationResult => ({ status: "skipped", reason });
-
-const warnSkipped = (warn: GitlabIntegrationOptions["warn"], reason: string) => {
-  warn?.(`GitLab summary note skipped: ${reason}`);
-};
 
 const isDecimalString = (value: string): boolean => /^[0-9]+$/.test(value);
 
@@ -107,7 +101,7 @@ const readOwnedNotes = async (
   client: GitlabClient,
   iid: string,
   currentJobName: string,
-): Promise<{ notes: { note: GitlabNote; marker: ParsedMarker }[]; complete: boolean }> => {
+): Promise<{ note: GitlabNote; marker: ParsedMarker }[]> => {
   const notes: { note: GitlabNote; marker: ParsedMarker }[] = [];
   let page = 1;
 
@@ -125,25 +119,25 @@ const readOwnedNotes = async (
     const nextPageHeader = headers.get("x-next-page");
 
     if (nextPageHeader === null) {
-      return { notes: [], complete: false };
+      throw new Error("incomplete note scan");
     }
 
     const nextPage = nextPageHeader.trim();
 
     if (!nextPage) {
-      return { notes, complete: true };
+      return notes;
     }
 
     const expectedNextPage = String(page + 1);
 
     if (!isDecimalString(nextPage) || nextPage !== expectedNextPage) {
-      return { notes: [], complete: false };
+      throw new Error("incomplete note scan");
     }
 
     page += 1;
   }
 
-  return { notes: [], complete: false };
+  throw new Error("incomplete note scan");
 };
 
 const selectNewestOwnedNote = (notes: { note: GitlabNote; marker: ParsedMarker }[]) =>
@@ -157,100 +151,50 @@ const selectNewestOwnedNote = (notes: { note: GitlabNote; marker: ParsedMarker }
 
 export const upsertGitlabJobNote = async (
   options: GitlabIntegrationOptions & { summary: GitlabReportSummary; reportUrl: string },
-): Promise<GitlabOperationResult> => {
+): Promise<void> => {
+  if (!resolveToken(options)) {
+    throw new Error("missing API token");
+  }
+
   const iid = gitlab.pullRequest?.id;
 
   if (!iid || !isDecimalString(iid)) {
-    warnSkipped(options.warn, "missing merge request");
-
-    return skipped("missing merge request");
+    throw new Error("missing merge request");
   }
 
   if (gitlab.projectId && gitlab.mergeRequestProjectId && gitlab.mergeRequestProjectId !== gitlab.projectId) {
-    warnSkipped(options.warn, "cross-project merge request");
-
-    return skipped("cross-project merge request");
+    throw new Error("cross-project merge request");
   }
 
   const client = createGitlabClient(options);
 
-  if (!client) {
-    return skipped("gitlab unavailable");
-  }
-
   if (!client.ci.currentJobId || !isDecimalString(client.ci.currentJobId)) {
-    warnSkipped(options.warn, "missing current job");
-
-    return skipped("missing current job");
+    throw new Error("missing current job");
   }
 
   const current = currentMarker(client);
-  let reportUrl: URL;
+  const reportUrl = new URL(options.reportUrl);
 
-  try {
-    reportUrl = new URL(options.reportUrl);
-
-    if (
-      (reportUrl.protocol !== "http:" && reportUrl.protocol !== "https:") ||
-      reportUrl.username ||
-      reportUrl.password
-    ) {
-      throw new Error("invalid report URL");
-    }
-  } catch {
-    warnSkipped(options.warn, "invalid report URL");
-
-    return skipped("invalid report URL");
+  if ((reportUrl.protocol !== "http:" && reportUrl.protocol !== "https:") || reportUrl.username || reportUrl.password) {
+    throw new Error("invalid report URL");
   }
 
   const body = `${ownershipMarker(current)}\n${reportUrl.href}`;
 
   if (body.length > MAX_COMMENT_LENGTH) {
-    warnSkipped(options.warn, "comment too large");
-
-    return skipped("comment too large");
+    throw new Error("comment too large");
   }
 
-  let ownedNotes: { note: GitlabNote; marker: ParsedMarker }[];
-
-  try {
-    const scan = await readOwnedNotes(client, iid, current.jobName);
-
-    if (!scan.complete) {
-      warnSkipped(options.warn, "incomplete note scan");
-
-      return skipped("incomplete note scan");
-    }
-
-    ownedNotes = scan.notes;
-  } catch (error) {
-    const reason =
-      error instanceof Error && error.message === "invalid notes response" ? error.message : "note lookup failed";
-
-    warnSkipped(options.warn, reason);
-
-    return skipped(reason);
-  }
-
+  const ownedNotes = await readOwnedNotes(client, iid, current.jobName);
   const selected = selectNewestOwnedNote(ownedNotes);
 
   if (selected && compareLogicalRun(selected.marker, current) > 0) {
-    warnSkipped(options.warn, "newer owned note exists");
-
-    return skipped("newer owned note exists");
+    throw new Error("newer owned note exists");
   }
 
-  try {
-    if (selected) {
-      await client.requestJson("PUT", `${notePath(client, iid)}/${encodePathSegment(selected.note.id)}`, { body });
-    } else {
-      await client.requestJson("POST", notePath(client, iid), { body });
-    }
-  } catch {
-    warnSkipped(options.warn, "note write failed");
-
-    return skipped("note write failed");
+  if (selected) {
+    await client.requestJson("PUT", `${notePath(client, iid)}/${encodePathSegment(selected.note.id)}`, { body });
+  } else {
+    await client.requestJson("POST", notePath(client, iid), { body });
   }
-
-  return { status: "ok" };
 };

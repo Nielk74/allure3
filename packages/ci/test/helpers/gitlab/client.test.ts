@@ -61,18 +61,23 @@ describe("createGitlabClient", () => {
     expect(calls.map((call) => call.headers["private-token"])).toEqual(["env-secret", "new-secret"]);
   });
 
-  it("does not use the former custom token variables", () => {
-    mockEnv(gitlabEnv({ GITLAB_TOKEN: "", ALLURE_GITLAB_TOKEN: "old-token", GITLAB_AUTH_TOKEN: "old-fallback" }));
-    const warn = vi.fn();
+  it("supports anonymous API requests when GITLAB_TOKEN is unset", async () => {
+    mockEnv(gitlabEnv({ GITLAB_TOKEN: "" }));
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-    expect(createGitlabClient({ warn })).toBeUndefined();
-    expect(calls).toHaveLength(0);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("missing token"));
+    const client = createGitlabClient();
+
+    expect(client).toBeDefined();
+    await expect(client!.requestJson("GET", "/projects/1")).resolves.toMatchObject({ data: { ok: true } });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers).toEqual({});
   });
 
-  it("strips private-token when an artifact redirect crosses origins", async () => {
-    mockEnv(gitlabEnv());
+  it.each([
+    { access: "authenticated", token: "env-token", expected: "env-token" },
+    { access: "anonymous", token: "", expected: undefined },
+  ])("keeps cross-origin artifact redirects unauthenticated with $access access", async ({ token, expected }) => {
+    mockEnv(gitlabEnv({ GITLAB_TOKEN: token }));
     const { calls } = stubFetch((call) => {
       if (call.url === "https://gitlab.example.com/api/v4/projects/1/jobs/99/artifacts/history.jsonl") {
         return new Response(null, {
@@ -84,12 +89,13 @@ describe("createGitlabClient", () => {
       return new Response("history\n", { status: 200 });
     });
 
-    const client = createGitlabClient()!;
-    const bytes = await client.downloadArtifact("99", "history.jsonl");
+    const client = createGitlabClient();
+    expect(client).toBeDefined();
+    const bytes = await client!.downloadArtifact("99", "history.jsonl");
 
     expect(new TextDecoder().decode(bytes)).toBe("history\n");
     expect(calls).toHaveLength(2);
-    expect(calls[0].headers["private-token"]).toBe("env-token");
+    expect(calls[0].headers["private-token"]).toBe(expected);
     expect(calls[1].url).toBe("https://cdn.example.net/object/history.jsonl");
     expect(calls[1].headers["private-token"]).toBeUndefined();
   });
@@ -124,7 +130,7 @@ describe("createGitlabClient", () => {
     const client = createGitlabClient()!;
     const query = client.query("query Timeout { project { id } }", {});
     try {
-      await expect(query).rejects.toThrow("GitLab response was not valid JSON");
+      await expect(query).rejects.toThrow("aborted");
       expect(timeout).toHaveBeenCalledWith(10_000);
       expect(calls).toHaveLength(1);
       expect(calls[0].signal?.aborted).toBe(true);
@@ -135,31 +141,22 @@ describe("createGitlabClient", () => {
   });
 
   it("rejects non-decimal GitLab identity strings before network I/O", () => {
-    const warn = vi.fn();
     mockEnv(gitlabEnv({ CI_PROJECT_ID: "project-1" }));
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-    const client = createGitlabClient({ warn });
-
-    expect(client).toBeUndefined();
+    expect(() => createGitlabClient()).toThrow("CI_PROJECT_ID");
     expect(calls).toHaveLength(0);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("invalid numeric metadata"));
   });
 
   it("rejects malformed REST API roots before network I/O", () => {
-    const warn = vi.fn();
     mockEnv(gitlabEnv({ CI_API_V4_URL: "https://gitlab.example.com/custom" }));
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-    const client = createGitlabClient({ warn });
-
-    expect(client).toBeUndefined();
+    expect(() => createGitlabClient()).toThrow("invalid GitLab API endpoint paths");
     expect(calls).toHaveLength(0);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("invalid API endpoint"));
   });
 
   it("rejects mismatched REST and GraphQL API origins before network I/O", () => {
-    const warn = vi.fn();
     mockEnv(
       gitlabEnv({
         CI_API_V4_URL: "https://gitlab.example.com/api/v4",
@@ -168,10 +165,7 @@ describe("createGitlabClient", () => {
     );
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-    const client = createGitlabClient({ warn });
-
-    expect(client).toBeUndefined();
+    expect(() => createGitlabClient()).toThrow("GitLab API origins do not match");
     expect(calls).toHaveLength(0);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("GitLab integration skipped"));
   });
 });

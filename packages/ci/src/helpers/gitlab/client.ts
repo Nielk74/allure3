@@ -18,26 +18,14 @@ type GraphqlEnvelope<T> = {
   errors?: unknown;
 };
 
-const warnSkipped = (warn: GitlabIntegrationOptions["warn"], reason: string) => {
-  warn?.(`GitLab integration skipped: ${reason}`);
-};
-
 const nonempty = (value: string | undefined): string | undefined => {
   const trimmed = value?.trim();
 
   return trimmed ? trimmed : undefined;
 };
 
-const resolveToken = (options?: GitlabIntegrationOptions): string | undefined =>
+export const resolveToken = (options?: GitlabIntegrationOptions): string | undefined =>
   nonempty(options?.token) || nonempty(getEnv("GITLAB_TOKEN"));
-
-const asUrl = (value: string): URL | undefined => {
-  try {
-    return new URL(value);
-  } catch {
-    return undefined;
-  }
-};
 
 const isDecimalString = (value: string): boolean => /^[0-9]+$/.test(value);
 
@@ -110,13 +98,11 @@ const requestWithTimeout = async <T>(
   init: RequestInit,
   consume: (response: Response) => Promise<T>,
 ): Promise<T> => {
-  let response: Response;
-
-  try {
-    response = await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), redirect: "manual" });
-  } catch {
-    throw new Error("GitLab request failed");
-  }
+  const response = await fetch(url, {
+    ...init,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    redirect: "manual",
+  });
 
   return consume(response);
 };
@@ -149,63 +135,34 @@ const assertTrustedApiUrl = (url: URL, apiOrigin: string) => {
   }
 };
 
-const responseJson = async <T>(response: Response): Promise<T> => {
-  try {
-    return (await response.json()) as T;
-  } catch {
-    throw new Error("GitLab response was not valid JSON");
-  }
-};
-
-export const createGitlabClient = (options?: GitlabIntegrationOptions): GitlabClient | undefined => {
+export const createGitlabClient = (options?: GitlabIntegrationOptions): GitlabClient => {
   const token = resolveToken(options);
-
-  if (!token) {
-    warnSkipped(options?.warn, "missing token");
-
-    return undefined;
-  }
-
   const ci = gitlab;
   const missingMetadata = requireMetadata(ci);
 
   if (missingMetadata.length > 0) {
-    warnSkipped(options?.warn, `missing ${missingMetadata.join(", ")}`);
-
-    return undefined;
+    throw new Error(`missing GitLab metadata: ${missingMetadata.join(", ")}`);
   }
 
   const invalidNumeric = invalidNumericMetadata(ci);
 
   if (invalidNumeric.length > 0) {
-    warnSkipped(options?.warn, `invalid numeric metadata ${invalidNumeric.join(", ")}`);
-
-    return undefined;
+    throw new Error(`invalid numeric GitLab metadata: ${invalidNumeric.join(", ")}`);
   }
 
-  const restApiUrl = asUrl(ci.restApiUrl);
-  const graphqlApiUrl = asUrl(ci.graphqlApiUrl);
-
-  if (!restApiUrl || !graphqlApiUrl) {
-    warnSkipped(options?.warn, "invalid API endpoint");
-
-    return undefined;
-  }
+  const restApiUrl = new URL(ci.restApiUrl);
+  const graphqlApiUrl = new URL(ci.graphqlApiUrl);
 
   if (!hasApiPathSuffix(restApiUrl, "/api/v4") || !hasApiPathSuffix(graphqlApiUrl, "/api/graphql")) {
-    warnSkipped(options?.warn, "invalid API endpoint");
-
-    return undefined;
+    throw new Error("invalid GitLab API endpoint paths");
   }
 
   if (restApiUrl.origin !== graphqlApiUrl.origin) {
-    warnSkipped(options?.warn, "REST and GraphQL API endpoints have different origins");
-
-    return undefined;
+    throw new Error("GitLab API origins do not match");
   }
 
   const apiOrigin = restApiUrl.origin;
-  const authHeaders = () => ({ "private-token": token });
+  const authHeaders = (): Record<string, string> => (token ? { "private-token": token } : {});
 
   return {
     ci,
@@ -233,7 +190,7 @@ export const createGitlabClient = (options?: GitlabIntegrationOptions): GitlabCl
             throw new Error("GitLab GraphQL request failed");
           }
 
-          const envelope = await responseJson<GraphqlEnvelope<T>>(response);
+          const envelope = (await response.json()) as GraphqlEnvelope<T>;
 
           if (!envelope || typeof envelope !== "object") {
             throw new Error("GitLab GraphQL response was invalid");
@@ -281,7 +238,7 @@ export const createGitlabClient = (options?: GitlabIntegrationOptions): GitlabCl
           }
 
           return {
-            data: await responseJson<T>(response),
+            data: (await response.json()) as T,
             headers: response.headers,
           };
         },
@@ -322,11 +279,7 @@ export const createGitlabClient = (options?: GitlabIntegrationOptions): GitlabCl
               throw new Error("GitLab artifact request failed");
             }
 
-            try {
-              return { type: "bytes", bytes: new Uint8Array(await response.arrayBuffer()) };
-            } catch {
-              throw new Error("GitLab artifact request failed");
-            }
+            return { type: "bytes", bytes: new Uint8Array(await response.arrayBuffer()) };
           },
         );
 

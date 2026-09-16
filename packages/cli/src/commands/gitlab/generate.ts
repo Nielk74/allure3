@@ -106,15 +106,20 @@ export class GitlabGenerateCommand extends Command {
       historyLimit: parseHistoryLimit(this.historyLimit),
     });
 
-    const warn = (message: string) => {
-      this.context.stderr.write(`${message}\n`);
+    const runGitlabOperation = async (operation: () => Promise<void>) => {
+      try {
+        await operation();
+      } catch (error) {
+        this.context.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      }
     };
 
-    await restoreGitlabHistory({
-      token: this.gitlabToken,
-      historyPath,
-      warn,
-    });
+    await runGitlabOperation(() =>
+      restoreGitlabHistory({
+        token: this.gitlabToken,
+        historyPath,
+      }),
+    );
 
     const result = await generate({
       cwd,
@@ -132,12 +137,14 @@ export class GitlabGenerateCommand extends Command {
     this.context.stdout.write(`GitLab report URL: ${reportUrl}\n`);
 
     if (result.summary && existsSync(join(config.output, "index.html"))) {
-      await upsertGitlabJobNote({
-        token: this.gitlabToken,
-        warn,
-        summary: result.summary,
-        reportUrl: reportUrl,
-      });
+      const { summary } = result;
+      await runGitlabOperation(() =>
+        upsertGitlabJobNote({
+          token: this.gitlabToken,
+          summary,
+          reportUrl,
+        }),
+      );
     }
   }
 }

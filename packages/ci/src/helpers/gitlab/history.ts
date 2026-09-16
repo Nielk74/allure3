@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, relative, sep } from "node:path";
 
 import { createGitlabClient, type GitlabClient } from "./client.js";
-import type { GitlabIntegrationOptions, GitlabOperationResult } from "./types.js";
+import type { GitlabIntegrationOptions } from "./types.js";
 
 const previousGitlabJobQuery = `query PreviousGitlabJob($path: ID!, $ref: String!, $source: String!, $job: String!) {
   project(fullPath: $path) {
@@ -31,12 +31,6 @@ type GitlabJobNode = {
   name: string;
   status: string;
   retried: boolean | null;
-};
-
-const skipped = (reason: string): GitlabOperationResult => ({ status: "skipped", reason });
-
-const warnSkipped = (warn: GitlabIntegrationOptions["warn"], reason: string) => {
-  warn?.(`GitLab history restore skipped: ${reason}`);
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
@@ -155,62 +149,29 @@ const projectRelativePath = (projectDirectory: string, historyPath: string): str
 
 export const restoreGitlabHistory = async (
   options: GitlabIntegrationOptions & { historyPath: string },
-): Promise<GitlabOperationResult> => {
+): Promise<void> => {
   const client = createGitlabClient(options);
-
-  if (!client) {
-    return skipped("gitlab unavailable");
-  }
-
-  let selectedJobId: string | undefined;
-
-  try {
-    const response = await client.query<PreviousGitlabJobResponse>(previousGitlabJobQuery, {
-      path: client.ci.projectPath,
-      ref: client.ci.ref,
-      source: client.ci.pipelineSource,
-      job: client.ci.ciJobName,
-    });
-    selectedJobId = selectPreviousJobId(client, parsePipelines(response));
-  } catch {
-    warnSkipped(options.warn, "invalid discovery response");
-
-    return skipped("invalid discovery response");
-  }
+  const response = await client.query<PreviousGitlabJobResponse>(previousGitlabJobQuery, {
+    path: client.ci.projectPath,
+    ref: client.ci.ref,
+    source: client.ci.pipelineSource,
+    job: client.ci.ciJobName,
+  });
+  const selectedJobId = selectPreviousJobId(client, parsePipelines(response));
 
   if (!selectedJobId) {
-    warnSkipped(options.warn, "no matching prior job in returned pipeline window");
-
-    return skipped("no matching prior job in returned pipeline window");
+    throw new Error("no matching prior job in returned pipeline window");
   }
 
-  let bytes: Uint8Array;
-
-  try {
-    bytes = await client.downloadArtifact(
-      selectedJobId,
-      projectRelativePath(client.ci.projectDirectory, options.historyPath),
-    );
-  } catch {
-    warnSkipped(options.warn, "artifact download failed");
-
-    return skipped("artifact download failed");
-  }
+  const bytes = await client.downloadArtifact(
+    selectedJobId,
+    projectRelativePath(client.ci.projectDirectory, options.historyPath),
+  );
 
   if (bytes.byteLength === 0) {
-    warnSkipped(options.warn, "empty history artifact");
-
-    return skipped("empty history artifact");
+    throw new Error("empty history artifact");
   }
 
-  try {
-    await mkdir(dirname(options.historyPath), { recursive: true });
-    await writeFile(options.historyPath, bytes);
-  } catch {
-    warnSkipped(options.warn, "history write failed");
-
-    return skipped("history write failed");
-  }
-
-  return { status: "ok" };
+  await mkdir(dirname(options.historyPath), { recursive: true });
+  await writeFile(options.historyPath, bytes);
 };

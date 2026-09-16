@@ -69,24 +69,27 @@ const summary = {
   flakyTests: 0,
   retryTests: 0,
 };
-const runCommand = (argv: string[] = [], stdout = new PassThrough()) =>
-  run(GitlabGenerateCommand, ["gitlab", "generate", ...argv], { stdout, stderr: new PassThrough() });
+const runCommand = (argv: string[] = [], stdout = new PassThrough(), stderr = new PassThrough()) =>
+  run(GitlabGenerateCommand, ["gitlab", "generate", ...argv], { stdout, stderr });
 
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(detect).mockReturnValue(gitlabCi);
   vi.mocked(existsSync).mockReturnValue(true);
   vi.mocked(readConfig).mockResolvedValue(baseConfig as never);
-  vi.mocked(restoreGitlabHistory).mockResolvedValue({ status: "ok" });
+  vi.mocked(restoreGitlabHistory).mockResolvedValue(undefined);
   vi.mocked(generate).mockResolvedValue({ summary });
-  vi.mocked(upsertGitlabJobNote).mockResolvedValue({ status: "ok" });
+  vi.mocked(upsertGitlabJobNote).mockResolvedValue(undefined);
 });
 
 describe("gitlab generate command", () => {
   it("includes the default output folder in historyBaseUrl, then restores, generates and posts in order", async () => {
     const stdout = new PassThrough();
+    const stderr = new PassThrough();
 
-    await expect(runCommand(["--gitlab-token", "token-from-cli", "./results"], stdout)).resolves.toBe(0);
+    await expect(runCommand(["--gitlab-token", "token-from-cli", "./results"], stdout, stderr)).resolves.toBe(0);
+
+    expect(stderr.read()).toBeNull();
 
     expect(readConfig).toHaveBeenCalledWith(expect.any(String), undefined, {
       name: undefined,
@@ -95,20 +98,16 @@ describe("gitlab generate command", () => {
       historyLimit: 100,
       historyBaseUrl: "https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report",
     });
-    expect(restoreGitlabHistory).toHaveBeenCalledWith(
-      expect.objectContaining({ token: "token-from-cli", historyPath: "history.jsonl" }),
-    );
+    expect(restoreGitlabHistory).toHaveBeenCalledWith({ token: "token-from-cli", historyPath: "history.jsonl" });
     expect(generate).toHaveBeenCalledWith(
       expect.objectContaining({ collectSummary: true, resultsDir: ["./results"], config: baseConfig }),
     );
     expect(existsSync).toHaveBeenCalledWith("/tmp/allure-report/index.html");
-    expect(upsertGitlabJobNote).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "token-from-cli",
-        reportUrl: "https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report/index.html",
-        summary,
-      }),
-    );
+    expect(upsertGitlabJobNote).toHaveBeenCalledWith({
+      token: "token-from-cli",
+      reportUrl: "https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report/index.html",
+      summary,
+    });
     expect(stdout.read()?.toString()).toContain(
       "GitLab report URL: https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report/index.html",
     );
@@ -164,6 +163,34 @@ describe("gitlab generate command", () => {
       expect.objectContaining({ reportUrl: "https://reports.example.test/runs/7/index.html" }),
     );
     expect(stdout.read()?.toString()).toContain("https://reports.example.test/runs/7/index.html");
+  });
+
+  it.each([
+    {
+      operation: "history restore",
+      reason: "artifact download failed",
+      warning: "artifact download failed\n",
+    },
+    {
+      operation: "note posting",
+      reason: "missing API token",
+      warning: "missing API token\n",
+    },
+  ])("logs a failed $operation once and still generates the report", async ({ operation, reason, warning }) => {
+    if (operation === "history restore") {
+      vi.mocked(restoreGitlabHistory).mockRejectedValueOnce(new Error(reason));
+    } else {
+      vi.mocked(upsertGitlabJobNote).mockRejectedValueOnce(new Error(reason));
+    }
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+
+    await expect(runCommand([], stdout, stderr)).resolves.toBe(0);
+
+    expect(stderr.read()?.toString()).toBe(warning);
+    expect(generate).toHaveBeenCalledOnce();
+    expect(upsertGitlabJobNote).toHaveBeenCalledOnce();
+    expect(stdout.read()?.toString()).toContain("GitLab report URL:");
   });
 
   it.each([
@@ -229,6 +256,18 @@ describe("gitlab generate command", () => {
     expect(readConfig).not.toHaveBeenCalled();
     expect(restoreGitlabHistory).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
+    expect(upsertGitlabJobNote).not.toHaveBeenCalled();
+  });
+
+  it("propagates generation errors without posting a note", async () => {
+    vi.mocked(generate).mockRejectedValueOnce(new Error("generation failed"));
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+
+    await expect(runCommand([], stdout, stderr)).resolves.toBe(1);
+
+    expect(stdout.read()?.toString()).toContain("generation failed");
+    expect(stderr.read()).toBeNull();
     expect(upsertGitlabJobNote).not.toHaveBeenCalled();
   });
 

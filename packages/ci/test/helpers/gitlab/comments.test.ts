@@ -42,6 +42,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("upsertGitlabJobNote", () => {
@@ -62,9 +63,7 @@ describe("upsertGitlabJobNote", () => {
       return new Response("unexpected", { status: 500 });
     });
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
-
-    expect(result).toEqual({ status: "ok" });
+    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
       `GET ${notesPath(1)}`,
       "POST https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes",
@@ -73,18 +72,41 @@ describe("upsertGitlabJobNote", () => {
     expect(body).toBe("<!-- allure-gitlab-summary:v1:dGVzdHM=:100:1000 -->\nhttps://reports.example/run/index.html");
   });
 
+  it("posts with an explicit token when GITLAB_TOKEN is absent", async () => {
+    mockEnv(mergeRequestEnv({ GITLAB_TOKEN: "" }));
+    const { calls } = stubFetch((call) => (call.method === "GET" ? notesResponse([]) : jsonResponse({ id: 10 })));
+
+    await upsertGitlabJobNote({
+      token: "explicit-token",
+      summary,
+      reportUrl: "https://reports.example/run/index.html",
+    });
+    expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
+    expect(calls.map((call) => call.headers["private-token"])).toEqual(["explicit-token", "explicit-token"]);
+  });
+
+  it.each([undefined, " "])("rejects without logging when the token is %j and GITLAB_TOKEN is blank", async (token) => {
+    mockEnv(mergeRequestEnv({ GITLAB_TOKEN: " " }));
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { calls } = stubFetch(() => jsonResponse({ ok: true }));
+
+    await expect(
+      upsertGitlabJobNote({ token, summary, reportUrl: "https://reports.example/run/index.html" }),
+    ).rejects.toThrow("missing API token");
+    expect(calls).toHaveLength(0);
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
   it("does not read the summary when creating a note", async () => {
     mockEnv(mergeRequestEnv());
     const { calls } = stubFetch((call) => (call.method === "GET" ? notesResponse([]) : jsonResponse({ id: 10 })));
 
-    const result = await upsertGitlabJobNote({
+    await upsertGitlabJobNote({
       get summary(): GitlabReportSummary {
         throw new Error("summary must not be read");
       },
       reportUrl: "https://reports.example/run/index.html",
     });
-
-    expect(result).toEqual({ status: "ok" });
     expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
     expect(requestBody(calls[1].body)).toBe(
       "<!-- allure-gitlab-summary:v1:dGVzdHM=:100:1000 -->\nhttps://reports.example/run/index.html",
@@ -113,9 +135,7 @@ describe("upsertGitlabJobNote", () => {
       return new Response("unexpected", { status: 500 });
     });
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
-
-    expect(result).toEqual({ status: "ok" });
+    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
       `GET ${notesPath(1)}`,
       "PUT https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes/3",
@@ -171,22 +191,16 @@ describe("upsertGitlabJobNote", () => {
       return new Response("unexpected", { status: 500 });
     });
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
-
-    expect(result).toEqual({ status: "ok" });
+    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
     expect(requestBody(calls[1].body)).toContain("allure-gitlab-summary:v1:dGVzdHM=:100:1000");
   });
 
-  it("posts the report URL without warning when CI_JOB_URL is missing", async () => {
-    const warn = vi.fn();
+  it("posts the report URL when CI_JOB_URL is missing", async () => {
     mockEnv(mergeRequestEnv({ CI_JOB_URL: "" }));
     const { calls } = stubFetch((call) => (call.method === "GET" ? notesResponse([]) : jsonResponse({ id: 10 })));
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html", warn });
-
-    expect(result).toEqual({ status: "ok" });
-    expect(warn).not.toHaveBeenCalled();
+    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
     expect(requestBody(calls[1].body)).toBe(
       "<!-- allure-gitlab-summary:v1:dGVzdHM=:100:1000 -->\nhttps://reports.example/run/index.html",
     );
@@ -204,9 +218,7 @@ describe("upsertGitlabJobNote", () => {
     const second = stubFetch((call) =>
       call.method === "GET" ? notesResponse([{ id: 10, body }]) : jsonResponse({ id: 10 }),
     );
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/retry/index.html" });
-
-    expect(result).toEqual({ status: "ok" });
+    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/retry/index.html" });
     expect(second.calls.map((call) => call.method)).toEqual(["GET", "PUT"]);
     expect(second.calls[1].url).toBe("https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes/10");
   });
@@ -224,9 +236,7 @@ describe("upsertGitlabJobNote", () => {
         : jsonResponse({ id: 10 }),
     );
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
-
-    expect(result).toEqual({ status: "ok" });
+    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
   });
 
@@ -238,9 +248,7 @@ describe("upsertGitlabJobNote", () => {
         : jsonResponse({ id: 5, body: requestBody(call.body) }),
     );
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
-
-    expect(result).toEqual({ status: "ok" });
+    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => call.method)).toEqual(["GET", "PUT"]);
     expect(calls[1].url).toBe("https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes/5");
   });
@@ -248,18 +256,16 @@ describe("upsertGitlabJobNote", () => {
   it.each([
     ["newer pipeline", noteBody("101", "900")],
     ["newer retry in the same pipeline", noteBody("100", "1001")],
-  ])("skips without writing over a %s note", async (_name, existingBody) => {
-    const warn = vi.fn();
+  ])("rejects overwriting a %s note", async (_name, existingBody) => {
     mockEnv(mergeRequestEnv());
     const { calls } = stubFetch((call) =>
       call.method === "GET" ? notesResponse([{ id: 5, body: existingBody }]) : jsonResponse({ ok: true }),
     );
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html", warn });
-
-    expect(result).toEqual({ status: "skipped", reason: "newer owned note exists" });
+    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
+      "newer owned note exists",
+    );
     expect(calls.map((call) => call.method)).toEqual(["GET"]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("newer owned note exists"));
   });
 
   it("follows complete note pagination and updates a note found on a later page", async () => {
@@ -277,9 +283,7 @@ describe("upsertGitlabJobNote", () => {
       return jsonResponse({ id: 200, body: requestBody(call.body) });
     });
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
-
-    expect(result).toEqual({ status: "ok" });
+    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
       `GET ${notesPath(1)}`,
       `GET ${notesPath(2)}`,
@@ -287,8 +291,7 @@ describe("upsertGitlabJobNote", () => {
     ]);
   });
 
-  it("skips instead of creating a duplicate when the note scan is incomplete after five pages", async () => {
-    const warn = vi.fn();
+  it("rejects creating a duplicate when the note scan is incomplete after five pages", async () => {
     mockEnv(mergeRequestEnv());
     const { calls } = stubFetch((call) => {
       if (call.method === "GET") {
@@ -300,30 +303,26 @@ describe("upsertGitlabJobNote", () => {
       return jsonResponse({ ok: true });
     });
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html", warn });
-
-    expect(result).toEqual({ status: "skipped", reason: "incomplete note scan" });
+    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
+      "incomplete note scan",
+    );
     expect(calls.map((call) => call.method)).toEqual(["GET", "GET", "GET", "GET", "GET"]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("incomplete note scan"));
   });
 
-  it("skips instead of creating a duplicate when a full note page omits pagination metadata", async () => {
-    const warn = vi.fn();
+  it("rejects creating a duplicate when a full note page omits pagination metadata", async () => {
     mockEnv(mergeRequestEnv());
     const fullPage = Array.from({ length: 100 }, (_value, index) => ({ id: index + 1, body: `unrelated ${index}` }));
     const { calls } = stubFetch((call) =>
       call.method === "GET" ? jsonResponse(fullPage) : jsonResponse({ ok: true }),
     );
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html", warn });
-
-    expect(result).toEqual({ status: "skipped", reason: "incomplete note scan" });
+    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
+      "incomplete note scan",
+    );
     expect(calls.map((call) => call.method)).toEqual(["GET"]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("incomplete note scan"));
   });
 
-  it("skips instead of writing when pagination jumps over an unscanned page", async () => {
-    const warn = vi.fn();
+  it("rejects writing when pagination jumps over an unscanned page", async () => {
     mockEnv(mergeRequestEnv());
     const { calls } = stubFetch((call) => {
       if (call.method === "GET") {
@@ -333,60 +332,52 @@ describe("upsertGitlabJobNote", () => {
       return jsonResponse({ ok: true });
     });
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html", warn });
-
-    expect(result).toEqual({ status: "skipped", reason: "incomplete note scan" });
+    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
+      "incomplete note scan",
+    );
     expect(calls.map((call) => call.method)).toEqual(["GET"]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("incomplete note scan"));
   });
 
-  it("skips cross-project merge requests before network I/O", async () => {
-    const warn = vi.fn();
+  it("rejects cross-project merge requests before network I/O", async () => {
     mockEnv(mergeRequestEnv({ CI_MERGE_REQUEST_PROJECT_ID: "2" }));
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html", warn });
-
-    expect(result).toEqual({ status: "skipped", reason: "cross-project merge request" });
+    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
+      "cross-project merge request",
+    );
     expect(calls).toHaveLength(0);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("cross-project merge request"));
   });
 
   it.each([
     ["missing merge request", { CI_MERGE_REQUEST_IID: "" }, "missing merge request"],
-    ["missing credentials", { GITLAB_TOKEN: "" }, "gitlab unavailable"],
-  ])("skips before note writes for %s", async (_name, overrides, reason) => {
-    const warn = vi.fn();
+    ["missing credentials", { GITLAB_TOKEN: "" }, "missing API token"],
+  ])("rejects before note writes for %s", async (_name, overrides, reason) => {
     mockEnv(mergeRequestEnv(overrides));
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html", warn });
-
-    expect(result).toEqual({ status: "skipped", reason });
+    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
+      reason,
+    );
     expect(calls).toHaveLength(0);
-    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("rejects malformed note payloads without writing", async () => {
-    const warn = vi.fn();
     mockEnv(mergeRequestEnv());
     const { calls } = stubFetch((call) =>
       call.method === "GET" ? notesResponse([{ id: 1, body: 2 }]) : jsonResponse({ ok: true }),
     );
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html", warn });
-
-    expect(result).toEqual({ status: "skipped", reason: "invalid notes response" });
+    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
+      "invalid notes response",
+    );
     expect(calls.map((call) => call.method)).toEqual(["GET"]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("invalid notes response"));
   });
 
   it.each([
-    ["lookup", "GET", "note lookup failed"],
-    ["create", "POST", "note write failed"],
-    ["update", "PUT", "note write failed"],
-  ])("treats %s HTTP failures as best effort", async (_name, failingMethod, reason) => {
-    const warn = vi.fn();
+    ["lookup", "GET", "GitLab API request failed"],
+    ["create", "POST", "GitLab API request failed"],
+    ["update", "PUT", "GitLab API request failed"],
+  ])("propagates %s HTTP failures", async (_name, failingMethod, reason) => {
     mockEnv(mergeRequestEnv());
     const { calls } = stubFetch((call) => {
       if (call.method === failingMethod) {
@@ -400,41 +391,33 @@ describe("upsertGitlabJobNote", () => {
       return jsonResponse({ ok: true });
     });
 
-    const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html", warn });
-
-    expect(result).toEqual({ status: "skipped", reason });
+    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
+      reason,
+    );
     expect(calls.some((call) => call.method === failingMethod)).toBe(true);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining(reason));
   });
 
   it.each(["", "not-a-url", "javascript:alert(1)", "https://user:password@reports.example/run/index.html"])(
-    "skips an invalid or unsafe report URL %j before network I/O",
+    "rejects an invalid or unsafe report URL %j before network I/O",
     async (reportUrl) => {
-      const warn = vi.fn();
       mockEnv(mergeRequestEnv());
       const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-      const result = await upsertGitlabJobNote({ summary, reportUrl, warn });
-
-      expect(result).toEqual({ status: "skipped", reason: "invalid report URL" });
+      await expect(upsertGitlabJobNote({ summary, reportUrl })).rejects.toThrow(/invalid.*URL/i);
       expect(calls).toHaveLength(0);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("invalid report URL"));
     },
   );
 
-  it("skips oversized comments before scanning notes", async () => {
-    const warn = vi.fn();
+  it("rejects oversized comments before scanning notes", async () => {
     mockEnv(mergeRequestEnv());
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-    const result = await upsertGitlabJobNote({
-      summary,
-      reportUrl: `https://reports.example/${"x".repeat(60_001)}/index.html`,
-      warn,
-    });
-
-    expect(result).toEqual({ status: "skipped", reason: "comment too large" });
+    await expect(
+      upsertGitlabJobNote({
+        summary,
+        reportUrl: `https://reports.example/${"x".repeat(60_001)}/index.html`,
+      }),
+    ).rejects.toThrow("comment too large");
     expect(calls).toHaveLength(0);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("comment too large"));
   });
 });

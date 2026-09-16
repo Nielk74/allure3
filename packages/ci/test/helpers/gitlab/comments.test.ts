@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe("upsertGitlabJobNote", () => {
-  it("creates an owned MR note with the rendered summary body when no matching note exists", async () => {
+  it("creates an owned MR note containing only the report URL when no matching note exists", async () => {
     mockEnv(mergeRequestEnv());
     const { calls } = stubFetch((call) => {
       if (call.method === "GET" && call.url === notesPath(1)) {
@@ -70,13 +70,25 @@ describe("upsertGitlabJobNote", () => {
       "POST https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes",
     ]);
     const body = requestBody(calls[1].body);
-    expect(body).toMatch(
-      new RegExp(`^${marker("100", "1000").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n# Allure Report Summary`),
+    expect(body).toBe("<!-- allure-gitlab-summary:v1:dGVzdHM=:100:1000 -->\nhttps://reports.example/run/index.html");
+  });
+
+  it("does not read the summary when creating a note", async () => {
+    mockEnv(mergeRequestEnv());
+    const { calls } = stubFetch((call) => (call.method === "GET" ? notesResponse([]) : jsonResponse({ id: 10 })));
+
+    const result = await upsertGitlabJobNote({
+      get summary(): GitlabReportSummary {
+        throw new Error("summary must not be read");
+      },
+      reportUrl: "https://reports.example/run/index.html",
+    });
+
+    expect(result).toEqual({ status: "ok" });
+    expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
+    expect(requestBody(calls[1].body)).toBe(
+      "<!-- allure-gitlab-summary:v1:dGVzdHM=:100:1000 -->\nhttps://reports.example/run/index.html",
     );
-    expect(body).toContain("[View GitLab job](https://gitlab.example.com/group/project/-/jobs/1000)");
-    expect(body).toContain("Tests \\| &lt;smoke&gt;");
-    expect(body).toContain("[View](https://reports.example/run/index.html)");
-    expect(body).not.toContain("env-token");
   });
 
   it("updates the newest owned note for an older logical run and keeps unrelated notes untouched", async () => {
@@ -108,7 +120,9 @@ describe("upsertGitlabJobNote", () => {
       `GET ${notesPath(1)}`,
       "PUT https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes/3",
     ]);
-    expect(requestBody(calls[1].body)).toContain(marker("100", "1000"));
+    expect(requestBody(calls[1].body)).toBe(
+      "<!-- allure-gitlab-summary:v1:dGVzdHM=:100:1000 -->\nhttps://reports.example/run/index.html",
+    );
   });
 
   it("keeps the exact-job ownership identity stable across runs within the MR", async () => {
@@ -164,7 +178,7 @@ describe("upsertGitlabJobNote", () => {
     expect(requestBody(calls[1].body)).toContain("allure-gitlab-summary:v1:dGVzdHM=:100:1000");
   });
 
-  it("warns and omits the job link when CI_JOB_URL is missing instead of reconstructing it", async () => {
+  it("posts the report URL without warning when CI_JOB_URL is missing", async () => {
     const warn = vi.fn();
     mockEnv(mergeRequestEnv({ CI_JOB_URL: "" }));
     const { calls } = stubFetch((call) => (call.method === "GET" ? notesResponse([]) : jsonResponse({ id: 10 })));
@@ -172,11 +186,10 @@ describe("upsertGitlabJobNote", () => {
     const result = await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html", warn });
 
     expect(result).toEqual({ status: "ok" });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("CI_JOB_URL"));
-    const body = requestBody(calls[1].body);
-    expect(body).not.toContain("View GitLab job");
-    expect(body).not.toContain("/-/jobs/");
-    expect(body).toContain("[View](https://reports.example/run/index.html)");
+    expect(warn).not.toHaveBeenCalled();
+    expect(requestBody(calls[1].body)).toBe(
+      "<!-- allure-gitlab-summary:v1:dGVzdHM=:100:1000 -->\nhttps://reports.example/run/index.html",
+    );
   });
 
   it("encodes marker delimiters, newlines and Unicode in job names without losing rolling ownership", async () => {
@@ -394,14 +407,29 @@ describe("upsertGitlabJobNote", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(reason));
   });
 
+  it.each(["", "not-a-url", "javascript:alert(1)", "https://user:password@reports.example/run/index.html"])(
+    "skips an invalid or unsafe report URL %j before network I/O",
+    async (reportUrl) => {
+      const warn = vi.fn();
+      mockEnv(mergeRequestEnv());
+      const { calls } = stubFetch(() => jsonResponse({ ok: true }));
+
+      const result = await upsertGitlabJobNote({ summary, reportUrl, warn });
+
+      expect(result).toEqual({ status: "skipped", reason: "invalid report URL" });
+      expect(calls).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("invalid report URL"));
+    },
+  );
+
   it("skips oversized comments before scanning notes", async () => {
     const warn = vi.fn();
     mockEnv(mergeRequestEnv());
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
     const result = await upsertGitlabJobNote({
-      summary: { ...summary, name: "x".repeat(60_001) },
-      reportUrl: "https://reports.example/run/index.html",
+      summary,
+      reportUrl: `https://reports.example/${"x".repeat(60_001)}/index.html`,
       warn,
     });
 

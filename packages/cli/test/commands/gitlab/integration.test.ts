@@ -121,7 +121,7 @@ describe("gitlab generate integration", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("restores a failed prior job artifact, appends one history point, and updates the owned MR note from the current snapshot", async () => {
+  it("restores a failed prior job artifact, appends one history point, and updates the owned MR note with the report URL", async () => {
     const firstResults = join(tempDir, "first-results");
     const firstReport = join(tempDir, "first-report");
     const firstHistory = join(tempDir, "history.jsonl");
@@ -299,10 +299,9 @@ describe("gitlab generate integration", () => {
         ({ method, url }) => method === "PUT" && url === "/api/v4/projects/100/merge_requests/5/notes/77",
       ),
     ).toHaveLength(1);
-    expect(updatedBodies[0]).toContain("# Allure Report Summary");
-    expect(updatedBodies[0]).toContain("| 1 | 0 | 0 | [View]");
-    expect(updatedBodies[0]).toContain(
-      "[View](https://group.gitlab.io/-/project/-/jobs/700/artifacts/second-report/index.html)",
+    expect(updatedBodies[0]).toBe(
+      "<!-- allure-gitlab-summary:v1:Z2VuZXJhdGUtcmVwb3J0:20:700 -->\n" +
+        "https://group.gitlab.io/-/project/-/jobs/700/artifacts/second-report/index.html",
     );
     expect(commandStdout.join("")).toContain(
       "GitLab report URL: https://group.gitlab.io/-/project/-/jobs/700/artifacts/second-report/index.html",
@@ -440,8 +439,9 @@ describe("gitlab generate integration", () => {
       ({ method, url }) => method === "POST" && url === "/api/v4/projects/100/merge_requests/5/notes",
     );
     expect(notes).toHaveLength(1);
-    expect(JSON.parse(notes[0].body).body).toContain(
-      `[View](${serverBase}/group/project/-/jobs/700/artifacts/report/index.html)`,
+    expect(JSON.parse(notes[0].body).body).toBe(
+      "<!-- allure-gitlab-summary:v1:Z2VuZXJhdGUtcmVwb3J0:20:700 -->\n" +
+        `${serverBase}/group/project/-/jobs/700/artifacts/report/index.html`,
     );
     expect(commandStdout.join("")).toContain(
       `GitLab report URL: ${serverBase}/group/project/-/jobs/700/artifacts/report/index.html`,

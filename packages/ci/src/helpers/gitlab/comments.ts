@@ -1,6 +1,5 @@
 import { gitlab } from "../../detectors/gitlab.js";
 import { createGitlabClient, type GitlabClient } from "./client.js";
-import { formatGitlabSummary } from "./summary.js";
 import type { GitlabIntegrationOptions, GitlabOperationResult, GitlabReportSummary } from "./types.js";
 
 const MARKER_VERSION = "v1";
@@ -186,24 +185,25 @@ export const upsertGitlabJobNote = async (
   }
 
   const current = currentMarker(client);
-  const jobUrl = client.ci.currentJobUrl;
-
-  if (!jobUrl) {
-    options.warn?.("GitLab job link omitted: missing CI_JOB_URL");
-  }
-
-  let body: string;
+  let reportUrl: URL;
 
   try {
-    body = `${ownershipMarker(current)}\n${formatGitlabSummary(options.summary, {
-      reportUrl: options.reportUrl,
-      jobUrl,
-    })}`;
-  } catch {
-    warnSkipped(options.warn, "summary render failed");
+    reportUrl = new URL(options.reportUrl);
 
-    return skipped("summary render failed");
+    if (
+      (reportUrl.protocol !== "http:" && reportUrl.protocol !== "https:") ||
+      reportUrl.username ||
+      reportUrl.password
+    ) {
+      throw new Error("invalid report URL");
+    }
+  } catch {
+    warnSkipped(options.warn, "invalid report URL");
+
+    return skipped("invalid report URL");
   }
+
+  const body = `${ownershipMarker(current)}\n${reportUrl.href}`;
 
   if (body.length > MAX_COMMENT_LENGTH) {
     warnSkipped(options.warn, "comment too large");

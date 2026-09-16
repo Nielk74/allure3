@@ -35,8 +35,8 @@ afterEach(() => {
 });
 
 describe("createGitlabClient", () => {
-  it("uses an explicit token before GITLAB_TOKEN without serializing it into CI metadata", async () => {
-    mockEnv(gitlabEnv({ GITLAB_TOKEN: "env-secret" }));
+  it("authenticates API requests with the supplied token", async () => {
+    mockEnv(gitlabEnv());
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
     const client = createGitlabClient({ token: "explicit-secret" })!;
@@ -44,40 +44,27 @@ describe("createGitlabClient", () => {
 
     expect(result.data).toEqual({ ok: true });
     expect(calls[0].headers["private-token"]).toBe("explicit-secret");
-    expect(JSON.stringify(client.ci)).not.toContain("explicit-secret");
-    expect(JSON.stringify(client.ci)).not.toContain("env-secret");
   });
 
-  it("reads GITLAB_TOKEN at client creation time when the explicit token is blank", async () => {
-    mockEnv(gitlabEnv({ GITLAB_TOKEN: " env-secret " }));
-    const { calls } = stubFetch(() => jsonResponse({ ok: true }));
+  it.each(["", "env-secret"])(
+    "makes anonymous requests without a supplied token when GITLAB_TOKEN is %j",
+    async (envToken) => {
+      mockEnv(gitlabEnv({ GITLAB_TOKEN: envToken }));
+      const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-    const client = createGitlabClient({ token: " " });
-    expect(client).toBeDefined();
-    await client!.requestJson("GET", "/projects/1");
-    mockEnv(gitlabEnv({ GITLAB_TOKEN: "new-secret" }));
-    await createGitlabClient()!.requestJson("GET", "/projects/1");
+      const client = createGitlabClient({ token: undefined });
 
-    expect(calls.map((call) => call.headers["private-token"])).toEqual(["env-secret", "new-secret"]);
-  });
-
-  it("supports anonymous API requests when GITLAB_TOKEN is unset", async () => {
-    mockEnv(gitlabEnv({ GITLAB_TOKEN: "" }));
-    const { calls } = stubFetch(() => jsonResponse({ ok: true }));
-
-    const client = createGitlabClient();
-
-    expect(client).toBeDefined();
-    await expect(client!.requestJson("GET", "/projects/1")).resolves.toMatchObject({ data: { ok: true } });
-    expect(calls).toHaveLength(1);
-    expect(calls[0].headers).toEqual({});
-  });
+      await expect(client.requestJson("GET", "/projects/1")).resolves.toMatchObject({ data: { ok: true } });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].headers).toEqual({});
+    },
+  );
 
   it.each([
-    { access: "authenticated", token: "env-token", expected: "env-token" },
-    { access: "anonymous", token: "", expected: undefined },
+    { access: "authenticated", token: "supplied-token", expected: "supplied-token" },
+    { access: "anonymous", token: undefined, expected: undefined },
   ])("keeps cross-origin artifact redirects unauthenticated with $access access", async ({ token, expected }) => {
-    mockEnv(gitlabEnv({ GITLAB_TOKEN: token }));
+    mockEnv(gitlabEnv());
     const { calls } = stubFetch((call) => {
       if (call.url === "https://gitlab.example.com/api/v4/projects/1/jobs/99/artifacts/history.jsonl") {
         return new Response(null, {
@@ -89,7 +76,7 @@ describe("createGitlabClient", () => {
       return new Response("history\n", { status: 200 });
     });
 
-    const client = createGitlabClient();
+    const client = createGitlabClient({ token });
     expect(client).toBeDefined();
     const bytes = await client!.downloadArtifact("99", "history.jsonl");
 

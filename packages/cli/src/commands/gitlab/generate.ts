@@ -114,6 +114,7 @@ export class GitlabGenerateCommand extends Command {
 
   async execute() {
     const cwd = processCwd();
+    const token = this.gitlabToken?.trim() || process.env.GITLAB_TOKEN?.trim() || undefined;
     const output = this.output ?? "allure-report";
     const configPath = this.config && existsSync(this.config) ? this.config : undefined;
     const historyPath = this.historyPath === undefined ? "history.jsonl" : this.historyPath;
@@ -136,7 +137,7 @@ export class GitlabGenerateCommand extends Command {
     log(" fetching previous run history", this.context);
     await runGitlabOperation("  history fetch failed", () =>
       restoreGitlabHistory({
-        token: this.gitlabToken,
+        token,
         historyPath,
       }),
     );
@@ -157,11 +158,16 @@ export class GitlabGenerateCommand extends Command {
     log(`GitLab report URL: ${reportUrl}`, this.context);
 
     if (result.summary && existsSync(join(config.output, "index.html"))) {
+      log("Posting report summary comment", this.context);
+      if (!token) {
+        log("  no API token provided, skipping", this.context);
+        return;
+      }
+
       const { summary } = result;
-      log(" adding test report summary comment", this.context);
       await runGitlabOperation("  failed to add summary comment", () =>
         upsertGitlabJobNote({
-          token: this.gitlabToken,
+          token,
           summary,
           reportUrl,
         }),

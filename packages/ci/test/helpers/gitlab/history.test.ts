@@ -69,14 +69,14 @@ afterEach(async () => {
 
 describe("restoreGitlabHistory", () => {
   it.each([
-    { access: "authenticated", token: "env-token", expected: "env-token" },
-    { access: "anonymous", token: "", expected: undefined },
+    { access: "authenticated", token: "supplied-token", expected: "supplied-token" },
+    { access: "anonymous", token: undefined, expected: undefined },
   ])(
     "overwrites history with bytes from the first eligible older job with $access access",
     async ({ token, expected }) => {
       const historyPath = join(tempDir!, "history.jsonl");
       await writeFile(historyPath, "existing\n");
-      mockEnv(gitlabEnv({ CI_PROJECT_DIR: tempDir!, GITLAB_TOKEN: token }));
+      mockEnv(gitlabEnv({ CI_PROJECT_DIR: tempDir! }));
       const { calls } = stubFetch((call) => {
         if (call.method === "POST" && call.url === "https://gitlab.example.com/api/graphql") {
           return jsonResponse({ data: { project: { pipelines: { nodes: pipelines } } } });
@@ -92,7 +92,7 @@ describe("restoreGitlabHistory", () => {
         return new Response("unexpected", { status: 500 });
       });
 
-      await restoreGitlabHistory({ historyPath });
+      await restoreGitlabHistory({ historyPath, token });
       expect(await readFile(historyPath, "utf8")).toBe("not-json\n");
       expect(calls.map((call) => call.headers["private-token"])).toEqual([expected, expected]);
       const graphqlCalls = calls.filter((call) => call.method === "POST");
@@ -397,7 +397,7 @@ describe("restoreGitlabHistory", () => {
   });
 
   it("rejects before network I/O outside GitLab CI", async () => {
-    mockEnv(gitlabEnv({ CI_PROJECT_DIR: tempDir!, GITLAB_CI: "", GITLAB_TOKEN: "env-token" }));
+    mockEnv(gitlabEnv({ CI_PROJECT_DIR: tempDir!, GITLAB_CI: "" }));
     const { calls } = stubFetch(() => new Response("must not fetch", { status: 500 }));
 
     await expect(restoreGitlabHistory({ historyPath: join(tempDir!, "history.jsonl") })).rejects.toThrow("GitLab CI");

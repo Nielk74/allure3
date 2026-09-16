@@ -1,6 +1,4 @@
 import { gitlab, type GitlabCiDescriptor } from "../../detectors/gitlab.js";
-import { getEnv } from "../../utils.js";
-import type { GitlabIntegrationOptions } from "./types.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_ARTIFACT_REDIRECTS = 5;
@@ -17,15 +15,6 @@ type GraphqlEnvelope<T> = {
   data?: T;
   errors?: unknown;
 };
-
-const nonempty = (value: string | undefined): string | undefined => {
-  const trimmed = value?.trim();
-
-  return trimmed ? trimmed : undefined;
-};
-
-export const resolveToken = (options?: GitlabIntegrationOptions): string | undefined =>
-  nonempty(options?.token) || nonempty(getEnv("GITLAB_TOKEN"));
 
 const isDecimalString = (value: string): boolean => /^[0-9]+$/.test(value);
 
@@ -135,8 +124,8 @@ const assertTrustedApiUrl = (url: URL, apiOrigin: string) => {
   }
 };
 
-export const createGitlabClient = (options?: GitlabIntegrationOptions): GitlabClient => {
-  const token = resolveToken(options);
+export const createGitlabClient = (options?: { token?: string }): GitlabClient => {
+  const token = options?.token;
   const ci = gitlab;
   const missingMetadata = requireMetadata(ci);
 

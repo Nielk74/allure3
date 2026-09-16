@@ -1,6 +1,6 @@
 import { gitlab } from "../../detectors/gitlab.js";
-import { createGitlabClient, resolveToken, type GitlabClient } from "./client.js";
-import type { GitlabIntegrationOptions, GitlabReportSummary } from "./types.js";
+import { createGitlabClient, type GitlabClient } from "./client.js";
+import type { GitlabReportSummary } from "./types.js";
 
 const MARKER_VERSION = "v1";
 const MAX_NOTE_SCAN_PAGES = 5;
@@ -149,13 +149,11 @@ const selectNewestOwnedNote = (notes: { note: GitlabNote; marker: ParsedMarker }
     return selected;
   }, undefined);
 
-export const upsertGitlabJobNote = async (
-  options: GitlabIntegrationOptions & { summary: GitlabReportSummary; reportUrl: string },
-): Promise<void> => {
-  if (!resolveToken(options)) {
-    throw new Error("missing API token");
-  }
-
+export const upsertGitlabJobNote = async (options: {
+  token: string;
+  summary: GitlabReportSummary;
+  reportUrl: string;
+}): Promise<void> => {
   const iid = gitlab.pullRequest?.id;
 
   if (!iid || !isDecimalString(iid)) {

@@ -31,7 +31,6 @@ export const gitlabEnv = (overrides: Record<string, string> = {}) => ({
   CI_JOB_URL: "https://gitlab.example.com/group/project/-/jobs/1000",
   CI_COMMIT_REF_NAME: "feature/a",
   CI_SERVER_URL: "https://gitlab.example.com",
-  GITLAB_TOKEN: "env-token",
   ...overrides,
 });
 

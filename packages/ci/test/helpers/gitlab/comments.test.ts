@@ -9,6 +9,7 @@ vi.mock("../../../src/utils.js", () => ({
   getEnv: vi.fn(),
 }));
 
+const apiToken = "supplied-token";
 const summary: GitlabReportSummary = {
   name: "Tests | <smoke>",
   duration: 1000,
@@ -63,7 +64,7 @@ describe("upsertGitlabJobNote", () => {
       return new Response("unexpected", { status: 500 });
     });
 
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
       `GET ${notesPath(1)}`,
       "POST https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes",
@@ -72,8 +73,8 @@ describe("upsertGitlabJobNote", () => {
     expect(body).toBe("<!-- allure-gitlab-summary:v1:dGVzdHM=:100:1000 -->\nhttps://reports.example/run/index.html");
   });
 
-  it("posts with an explicit token when GITLAB_TOKEN is absent", async () => {
-    mockEnv(mergeRequestEnv({ GITLAB_TOKEN: "" }));
+  it("posts with the supplied token", async () => {
+    mockEnv(mergeRequestEnv());
     const { calls } = stubFetch((call) => (call.method === "GET" ? notesResponse([]) : jsonResponse({ id: 10 })));
 
     await upsertGitlabJobNote({
@@ -83,34 +84,6 @@ describe("upsertGitlabJobNote", () => {
     });
     expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
     expect(calls.map((call) => call.headers["private-token"])).toEqual(["explicit-token", "explicit-token"]);
-  });
-
-  it.each([undefined, " "])("rejects without logging when the token is %j and GITLAB_TOKEN is blank", async (token) => {
-    mockEnv(mergeRequestEnv({ GITLAB_TOKEN: " " }));
-    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { calls } = stubFetch(() => jsonResponse({ ok: true }));
-
-    await expect(
-      upsertGitlabJobNote({ token, summary, reportUrl: "https://reports.example/run/index.html" }),
-    ).rejects.toThrow("missing API token");
-    expect(calls).toHaveLength(0);
-    expect(consoleWarn).not.toHaveBeenCalled();
-  });
-
-  it("does not read the summary when creating a note", async () => {
-    mockEnv(mergeRequestEnv());
-    const { calls } = stubFetch((call) => (call.method === "GET" ? notesResponse([]) : jsonResponse({ id: 10 })));
-
-    await upsertGitlabJobNote({
-      get summary(): GitlabReportSummary {
-        throw new Error("summary must not be read");
-      },
-      reportUrl: "https://reports.example/run/index.html",
-    });
-    expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
-    expect(requestBody(calls[1].body)).toBe(
-      "<!-- allure-gitlab-summary:v1:dGVzdHM=:100:1000 -->\nhttps://reports.example/run/index.html",
-    );
   });
 
   it("updates the newest owned note for an older logical run and keeps unrelated notes untouched", async () => {
@@ -135,7 +108,7 @@ describe("upsertGitlabJobNote", () => {
       return new Response("unexpected", { status: 500 });
     });
 
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
       `GET ${notesPath(1)}`,
       "PUT https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes/3",
@@ -155,7 +128,7 @@ describe("upsertGitlabJobNote", () => {
       return jsonResponse({ id: 10, body: requestBody(call.body) });
     });
 
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/first/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/first/index.html" });
     const firstBody = requestBody(first.calls[1].body);
     expect(firstBody).toContain("allure-gitlab-summary:v1:dGVzdHM=:100:1000");
 
@@ -169,7 +142,7 @@ describe("upsertGitlabJobNote", () => {
       return jsonResponse({ id: 10, body: requestBody(call.body) });
     });
 
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/second/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/second/index.html" });
     const secondBody = requestBody(second.calls[1].body);
     expect(second.calls.map((call) => call.method)).toEqual(["GET", "PUT"]);
     expect(second.calls[1].url).toBe("https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes/10");
@@ -191,7 +164,7 @@ describe("upsertGitlabJobNote", () => {
       return new Response("unexpected", { status: 500 });
     });
 
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
     expect(requestBody(calls[1].body)).toContain("allure-gitlab-summary:v1:dGVzdHM=:100:1000");
   });
@@ -200,7 +173,7 @@ describe("upsertGitlabJobNote", () => {
     mockEnv(mergeRequestEnv({ CI_JOB_URL: "" }));
     const { calls } = stubFetch((call) => (call.method === "GET" ? notesResponse([]) : jsonResponse({ id: 10 })));
 
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" });
     expect(requestBody(calls[1].body)).toBe(
       "<!-- allure-gitlab-summary:v1:dGVzdHM=:100:1000 -->\nhttps://reports.example/run/index.html",
     );
@@ -209,7 +182,7 @@ describe("upsertGitlabJobNote", () => {
   it("encodes marker delimiters, newlines and Unicode in job names without losing rolling ownership", async () => {
     mockEnv(mergeRequestEnv({ CI_JOB_NAME: "tests: -->\n/close 🧪" }));
     const first = stubFetch((call) => (call.method === "GET" ? notesResponse([]) : jsonResponse({ id: 10 })));
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/first/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/first/index.html" });
     const body = requestBody(first.calls[1].body);
     expect(body.split("\n")[0]).toBe("<!-- allure-gitlab-summary:v1:dGVzdHM6IC0tPgovY2xvc2Ug8J+nqg==:100:1000 -->");
     expect(body).not.toContain("\n/close");
@@ -218,7 +191,7 @@ describe("upsertGitlabJobNote", () => {
     const second = stubFetch((call) =>
       call.method === "GET" ? notesResponse([{ id: 10, body }]) : jsonResponse({ id: 10 }),
     );
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/retry/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/retry/index.html" });
     expect(second.calls.map((call) => call.method)).toEqual(["GET", "PUT"]);
     expect(second.calls[1].url).toBe("https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes/10");
   });
@@ -236,7 +209,7 @@ describe("upsertGitlabJobNote", () => {
         : jsonResponse({ id: 10 }),
     );
 
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
   });
 
@@ -248,7 +221,7 @@ describe("upsertGitlabJobNote", () => {
         : jsonResponse({ id: 5, body: requestBody(call.body) }),
     );
 
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => call.method)).toEqual(["GET", "PUT"]);
     expect(calls[1].url).toBe("https://gitlab.example.com/api/v4/projects/1/merge_requests/7/notes/5");
   });
@@ -262,9 +235,9 @@ describe("upsertGitlabJobNote", () => {
       call.method === "GET" ? notesResponse([{ id: 5, body: existingBody }]) : jsonResponse({ ok: true }),
     );
 
-    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
-      "newer owned note exists",
-    );
+    await expect(
+      upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" }),
+    ).rejects.toThrow("newer owned note exists");
     expect(calls.map((call) => call.method)).toEqual(["GET"]);
   });
 
@@ -283,7 +256,7 @@ describe("upsertGitlabJobNote", () => {
       return jsonResponse({ id: 200, body: requestBody(call.body) });
     });
 
-    await upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" });
+    await upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" });
     expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
       `GET ${notesPath(1)}`,
       `GET ${notesPath(2)}`,
@@ -303,9 +276,9 @@ describe("upsertGitlabJobNote", () => {
       return jsonResponse({ ok: true });
     });
 
-    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
-      "incomplete note scan",
-    );
+    await expect(
+      upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" }),
+    ).rejects.toThrow("incomplete note scan");
     expect(calls.map((call) => call.method)).toEqual(["GET", "GET", "GET", "GET", "GET"]);
   });
 
@@ -316,9 +289,9 @@ describe("upsertGitlabJobNote", () => {
       call.method === "GET" ? jsonResponse(fullPage) : jsonResponse({ ok: true }),
     );
 
-    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
-      "incomplete note scan",
-    );
+    await expect(
+      upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" }),
+    ).rejects.toThrow("incomplete note scan");
     expect(calls.map((call) => call.method)).toEqual(["GET"]);
   });
 
@@ -332,9 +305,9 @@ describe("upsertGitlabJobNote", () => {
       return jsonResponse({ ok: true });
     });
 
-    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
-      "incomplete note scan",
-    );
+    await expect(
+      upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" }),
+    ).rejects.toThrow("incomplete note scan");
     expect(calls.map((call) => call.method)).toEqual(["GET"]);
   });
 
@@ -342,22 +315,22 @@ describe("upsertGitlabJobNote", () => {
     mockEnv(mergeRequestEnv({ CI_MERGE_REQUEST_PROJECT_ID: "2" }));
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
-      "cross-project merge request",
-    );
+    await expect(
+      upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" }),
+    ).rejects.toThrow("cross-project merge request");
     expect(calls).toHaveLength(0);
   });
 
   it.each([
-    ["missing merge request", { CI_MERGE_REQUEST_IID: "" }, "missing merge request"],
-    ["missing credentials", { GITLAB_TOKEN: "" }, "missing API token"],
-  ])("rejects before note writes for %s", async (_name, overrides, reason) => {
+    ["missing merge request", { CI_MERGE_REQUEST_IID: "" }, apiToken, "missing merge request"],
+    ["missing credentials", {}, undefined, "missing API token"],
+  ])("rejects before note writes for %s", async (_name, overrides, token, reason) => {
     mockEnv(mergeRequestEnv(overrides));
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
-      reason,
-    );
+    await expect(
+      upsertGitlabJobNote({ token, summary, reportUrl: "https://reports.example/run/index.html" }),
+    ).rejects.toThrow(reason);
     expect(calls).toHaveLength(0);
   });
 
@@ -367,9 +340,9 @@ describe("upsertGitlabJobNote", () => {
       call.method === "GET" ? notesResponse([{ id: 1, body: 2 }]) : jsonResponse({ ok: true }),
     );
 
-    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
-      "invalid notes response",
-    );
+    await expect(
+      upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" }),
+    ).rejects.toThrow("invalid notes response");
     expect(calls.map((call) => call.method)).toEqual(["GET"]);
   });
 
@@ -391,9 +364,9 @@ describe("upsertGitlabJobNote", () => {
       return jsonResponse({ ok: true });
     });
 
-    await expect(upsertGitlabJobNote({ summary, reportUrl: "https://reports.example/run/index.html" })).rejects.toThrow(
-      reason,
-    );
+    await expect(
+      upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" }),
+    ).rejects.toThrow(reason);
     expect(calls.some((call) => call.method === failingMethod)).toBe(true);
   });
 
@@ -403,7 +376,7 @@ describe("upsertGitlabJobNote", () => {
       mockEnv(mergeRequestEnv());
       const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
-      await expect(upsertGitlabJobNote({ summary, reportUrl })).rejects.toThrow(/invalid.*URL/i);
+      await expect(upsertGitlabJobNote({ token: apiToken, summary, reportUrl })).rejects.toThrow(/invalid.*URL/i);
       expect(calls).toHaveLength(0);
     },
   );
@@ -414,6 +387,7 @@ describe("upsertGitlabJobNote", () => {
 
     await expect(
       upsertGitlabJobNote({
+        token: apiToken,
         summary,
         reportUrl: `https://reports.example/${"x".repeat(60_001)}/index.html`,
       }),

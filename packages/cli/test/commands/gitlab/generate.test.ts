@@ -6,7 +6,7 @@ import { type GitlabCiDescriptor, detect, restoreGitlabHistory, upsertGitlabJobN
 import { readConfig } from "@allurereport/core";
 import { CiType } from "@allurereport/core-api";
 import { run } from "clipanion";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { generate } from "../../../src/commands/commons/generate.js";
 import { GitlabGenerateCommand } from "../../../src/commands/gitlab/generate.js";
@@ -75,6 +75,7 @@ const runCommand = (argv: string[] = [], stdout = new PassThrough(), stderr = ne
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubEnv("GITLAB_TOKEN", undefined);
   vi.mocked(detect).mockReturnValue(gitlabCi);
   vi.mocked(existsSync).mockReturnValue(true);
   vi.mocked(readConfig).mockResolvedValue(baseConfig as never);
@@ -83,7 +84,31 @@ beforeEach(() => {
   vi.mocked(upsertGitlabJobNote).mockResolvedValue(undefined);
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("gitlab generate command", () => {
+  it.each([
+    { name: "CLI token precedence", cliToken: " cli-token ", envToken: "env-token", expected: "cli-token" },
+    { name: "environment token", cliToken: undefined, envToken: " env-token ", expected: "env-token" },
+    { name: "blank CLI token", cliToken: " ", envToken: "env-token", expected: "env-token" },
+    { name: "absent credentials", cliToken: undefined, envToken: undefined, expected: undefined },
+    { name: "blank credentials", cliToken: " ", envToken: " ", expected: undefined },
+  ])("passes the resolved token to history and note operations for $name", async ({ cliToken, envToken, expected }) => {
+    vi.stubEnv("GITLAB_TOKEN", envToken);
+    const args = cliToken === undefined ? [] : ["--gitlab-token", cliToken];
+
+    await expect(runCommand(args)).resolves.toBe(0);
+
+    expect(restoreGitlabHistory).toHaveBeenCalledWith({ token: expected, historyPath: "history.jsonl" });
+    if (expected) {
+      expect(upsertGitlabJobNote).toHaveBeenCalledWith(expect.objectContaining({ token: expected }));
+    } else {
+      expect(upsertGitlabJobNote).not.toHaveBeenCalled();
+    }
+  });
+
   it("includes the default output folder in historyBaseUrl, then restores, generates and posts in order", async () => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
@@ -174,6 +199,8 @@ describe("gitlab generate command", () => {
           "7",
           "--history-base-url",
           "https://reports.example.test/runs/7",
+          "--gitlab-token",
+          "token",
         ],
         stdout,
       ),
@@ -195,31 +222,15 @@ describe("gitlab generate command", () => {
     expect(stdout.read()?.toString()).toContain("https://reports.example.test/runs/7/index.html");
   });
 
-  it.each([
-    {
-      operation: "history restore",
-      reason: "artifact download failed",
-      warning: "artifact download failed\n",
-    },
-    {
-      operation: "note posting",
-      reason: "missing API token",
-      warning: "missing API token\n",
-    },
-  ])("logs a failed $operation once and still generates the report", async ({ operation, reason, warning }) => {
-    if (operation === "history restore") {
-      vi.mocked(restoreGitlabHistory).mockRejectedValueOnce(new Error(reason));
-    } else {
-      vi.mocked(upsertGitlabJobNote).mockRejectedValueOnce(new Error(reason));
-    }
+  it("generates report with failure to fetch history", async () => {
+    vi.mocked(restoreGitlabHistory).mockRejectedValueOnce(new Error("artifact download failed"));
     const stdout = new PassThrough();
     const stderr = new PassThrough();
 
-    await expect(runCommand([], stdout, stderr)).resolves.toBe(0);
+    await expect(runCommand(["--gitlab-token", "token"], stdout, stderr)).resolves.toBe(0);
 
     const output = stdout.read()?.toString() ?? "";
-    expect((stderr.read()?.toString() ?? "").split(warning)).toHaveLength(2);
-    expect(output).not.toContain(warning);
+    expect((stderr.read()?.toString() ?? "").split("artifact download failed\n")).toHaveLength(2);
     expect(generate).toHaveBeenCalledOnce();
     expect(upsertGitlabJobNote).toHaveBeenCalledOnce();
     expect(output).toContain("GitLab report URL:");

@@ -2,7 +2,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, relative, sep } from "node:path";
 
 import { createGitlabClient, type GitlabClient } from "./client.js";
-import type { GitlabIntegrationOptions } from "./types.js";
 
 const previousGitlabJobQuery = `query PreviousGitlabJob($path: ID!, $ref: String!, $source: String!, $job: String!) {
   project(fullPath: $path) {
@@ -147,9 +146,7 @@ const selectPreviousJobId = (client: GitlabClient, nodes: GitlabPipelineNode[]):
 const projectRelativePath = (projectDirectory: string, historyPath: string): string =>
   relative(projectDirectory, historyPath).split(sep).join("/");
 
-export const restoreGitlabHistory = async (
-  options: GitlabIntegrationOptions & { historyPath: string },
-): Promise<void> => {
+export const restoreGitlabHistory = async (options: { token?: string; historyPath: string }): Promise<void> => {
   const client = createGitlabClient(options);
   const response = await client.query<PreviousGitlabJobResponse>(previousGitlabJobQuery, {
     path: client.ci.projectPath,

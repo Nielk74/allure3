@@ -59,6 +59,7 @@ export const TreeItem: FunctionComponent<TreeItemProps> = ({
       )}
       onClick={handleClick}
       id={id}
+      title={name}
       data-tree-node-id={treeNodeId}
       aria-current={focused ? "true" : undefined}
     >

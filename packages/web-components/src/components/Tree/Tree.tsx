@@ -19,6 +19,7 @@ import { TreeItem } from "@/components/Tree/TreeItem";
 
 import type { RecursiveTree, Status } from "../../../global";
 import { TreeHeader } from "./TreeHeader";
+import { VirtualizedTreeLeaves } from "./VirtualizedTreeLeaves";
 
 import styles from "./styles.scss";
 
@@ -51,6 +52,7 @@ const isNodeOpened = (nodeId: string, collapsedTrees: Set<string>, defaultOpened
 const hasTreeChildren = (tree: RecursiveTree) => hasExpandableTreeChildren(tree);
 
 const hasTreeOnlyLeafResults = (tree: RecursiveTree) => hasTreeChildren(tree) && tree.trees.length === 0;
+const VIRTUALIZATION_THRESHOLD = 100;
 const subtreeToggleIconByState = {
   "single-down": allureIcons.lineArrowsChevronDown,
   "single-up": allureIcons.lineArrowsChevronUp,
@@ -148,46 +150,6 @@ export const Tree: FunctionalComponent<TreeProps> = ({
     return null;
   }
 
-  const renderedSubtrees = tree.trees.map((subTree) => (
-    <Tree
-      key={subTree.nodeId}
-      name={subTree.name}
-      tree={subTree}
-      statistic={subTree.statistic}
-      reportStatistic={reportStatistic}
-      statusFilter={statusFilter}
-      collapsedTrees={collapsedTrees}
-      toggleTree={toggleTree}
-      routeId={routeId}
-      focusedId={focusedId}
-      focusIdPrefix={focusIdPrefix}
-      isGroupOpened={isGroupOpened}
-      navigateTo={navigateTo}
-    />
-  ));
-
-  const renderedLeaves = tree.leaves.map((leaf) => (
-    <TreeItem
-      data-testid="tree-leaf"
-      key={leaf.nodeId}
-      id={leaf.nodeId}
-      name={leaf.name}
-      status={leaf.status}
-      groupOrder={leaf.groupOrder as number}
-      duration={leaf.duration}
-      retriesCount={leaf.retriesCount}
-      resolution={leaf.resolution}
-      transition={leaf.transition}
-      transitionTooltip={leaf.transitionTooltip}
-      tooltips={leaf.tooltips}
-      flaky={leaf.flaky}
-      marked={leaf.nodeId === routeId}
-      focused={toScopedId(leaf.nodeId) === focusedId}
-      focusNodeId={toScopedId(leaf.nodeId)}
-      navigateTo={navigateTo}
-    />
-  ));
-
   const headerActions = hasChildren ? (
     <IconButton
       size="xs"
@@ -201,8 +163,54 @@ export const Tree: FunctionalComponent<TreeProps> = ({
 
   const treeContent = isOpened ? (
     <div data-testid="tree-content" className={contentClassName}>
-      {renderedSubtrees}
-      {renderedLeaves}
+      {tree.trees.map((subTree) => (
+        <Tree
+          key={subTree.nodeId}
+          name={subTree.name}
+          tree={subTree}
+          statistic={subTree.statistic}
+          reportStatistic={reportStatistic}
+          statusFilter={statusFilter}
+          collapsedTrees={collapsedTrees}
+          toggleTree={toggleTree}
+          routeId={routeId}
+          focusedId={focusedId}
+          focusIdPrefix={focusIdPrefix}
+          isGroupOpened={isGroupOpened}
+          navigateTo={navigateTo}
+        />
+      ))}
+      {tree.leaves.length > VIRTUALIZATION_THRESHOLD ? (
+        <VirtualizedTreeLeaves
+          leaves={tree.leaves}
+          routeId={routeId}
+          focusedId={focusedId}
+          toScopedId={toScopedId}
+          navigateTo={navigateTo}
+        />
+      ) : (
+        tree.leaves.map((leaf) => (
+          <TreeItem
+            data-testid="tree-leaf"
+            key={leaf.nodeId}
+            id={leaf.nodeId}
+            name={leaf.name}
+            status={leaf.status}
+            groupOrder={leaf.groupOrder as number}
+            duration={leaf.duration}
+            retriesCount={leaf.retriesCount}
+            resolution={leaf.resolution}
+            transition={leaf.transition}
+            transitionTooltip={leaf.transitionTooltip}
+            tooltips={leaf.tooltips}
+            flaky={leaf.flaky}
+            marked={leaf.nodeId === routeId}
+            focused={toScopedId(leaf.nodeId) === focusedId}
+            focusNodeId={toScopedId(leaf.nodeId)}
+            navigateTo={navigateTo}
+          />
+        ))
+      )}
     </div>
   ) : null;
 

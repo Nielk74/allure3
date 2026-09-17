@@ -96,6 +96,8 @@
   gap: 4px;
   cursor: pointer;
   position: relative;
+  box-sizing: border-box;
+  height: 32px;
 
   &:hover {
     background: var(--color-control-bg-ghost-hover);
@@ -110,7 +112,10 @@
   display: flex;
   align-items: flex-start;
   margin-right: auto;
-  word-break: break-word;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .test-count {

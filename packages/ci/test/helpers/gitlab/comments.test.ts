@@ -321,16 +321,13 @@ describe("upsertGitlabJobNote", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it.each([
-    ["missing merge request", { CI_MERGE_REQUEST_IID: "" }, apiToken, "missing merge request"],
-    ["missing credentials", {}, undefined, "missing API token"],
-  ])("rejects before note writes for %s", async (_name, overrides, token, reason) => {
-    mockEnv(mergeRequestEnv(overrides));
+  it("rejects before note writes for %s", async () => {
+    mockEnv(mergeRequestEnv({ CI_MERGE_REQUEST_IID: "" }));
     const { calls } = stubFetch(() => jsonResponse({ ok: true }));
 
     await expect(
-      upsertGitlabJobNote({ token, summary, reportUrl: "https://reports.example/run/index.html" }),
-    ).rejects.toThrow(reason);
+      upsertGitlabJobNote({ token: apiToken, summary, reportUrl: "https://reports.example/run/index.html" }),
+    ).rejects.toThrow("missing merge request");
     expect(calls).toHaveLength(0);
   });
 

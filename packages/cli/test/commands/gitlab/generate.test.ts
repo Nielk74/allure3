@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { type GitlabCiDescriptor, detect, restoreGitlabHistory, upsertGitlabJobNote } from "@allurereport/ci";
@@ -128,7 +128,7 @@ describe("gitlab generate command", () => {
     expect(generate).toHaveBeenCalledWith(
       expect.objectContaining({ collectSummary: true, resultsDir: ["./results"], config: baseConfig }),
     );
-    expect(existsSync).toHaveBeenCalledWith("/tmp/allure-report/index.html");
+    expect(existsSync).toHaveBeenCalledWith(join(baseConfig.output, "index.html"));
     expect(upsertGitlabJobNote).toHaveBeenCalledWith({
       token: "token-from-cli",
       reportUrl: "https://group.gitlab.io/-/project/-/jobs/123/artifacts/allure-report/index.html",
@@ -215,7 +215,7 @@ describe("gitlab generate command", () => {
     });
     expect(restoreGitlabHistory).toHaveBeenCalledWith(expect.objectContaining({ historyPath: "cli-history.jsonl" }));
     expect(generate).toHaveBeenCalledWith(expect.objectContaining({ config }));
-    expect(existsSync).toHaveBeenCalledWith("/tmp/reports/cli-report/index.html");
+    expect(existsSync).toHaveBeenCalledWith(join("/tmp", "reports/cli-report", "index.html"));
     expect(upsertGitlabJobNote).toHaveBeenCalledWith(
       expect.objectContaining({ reportUrl: "https://reports.example.test/runs/7/index.html" }),
     );
@@ -342,7 +342,7 @@ describe("gitlab generate command", () => {
     await expect(runCommand()).resolves.toBe(0);
 
     expect(generate).toHaveBeenCalledOnce();
-    expect(existsSync).toHaveBeenCalledWith("/tmp/allure-report/index.html");
+    expect(existsSync).toHaveBeenCalledWith(join(baseConfig.output, "index.html"));
     expect(upsertGitlabJobNote).not.toHaveBeenCalled();
   });
 });

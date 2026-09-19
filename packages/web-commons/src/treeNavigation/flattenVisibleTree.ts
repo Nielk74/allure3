@@ -1,11 +1,5 @@
-import type { Statistic } from "@allurereport/core-api";
-
+import { getTreeGroupDefaultOpenedState } from "../subtreeExpansion.js";
 import type { EnvTreeSection, FlatTreeNode, FlattenTreeInput, FlattenVisibleTreeOptions } from "./types.js";
-
-const isFailedOrBrokenNode = (statistic?: Statistic) =>
-  statistic === undefined || Boolean(statistic?.failed || statistic?.broken);
-
-const getDefaultOpenedState = (statistic?: Statistic, root = false) => root || isFailedOrBrokenNode(statistic);
 
 const isNodeOpened = (
   nodeId: string,
@@ -27,7 +21,7 @@ const resolveGroupOpened = (
   collapsedTrees: ReadonlySet<string>,
   options: { root?: boolean; idPrefix?: string; isGroupOpened?: FlattenVisibleTreeOptions["isGroupOpened"] },
 ) => {
-  const defaultOpened = getDefaultOpenedState(tree.statistic, Boolean(options.root));
+  const defaultOpened = getTreeGroupDefaultOpenedState(Boolean(options.root));
   const scopedId = toFocusId(tree.nodeId, options.idPrefix);
 
   if (options.isGroupOpened) {
@@ -50,7 +44,7 @@ const flattenTreeNode = (
 ): FlatTreeNode[] => {
   const result: FlatTreeNode[] = [];
   const { idPrefix } = options;
-  const defaultOpened = getDefaultOpenedState(tree.statistic, Boolean(options.root));
+  const defaultOpened = getTreeGroupDefaultOpenedState(Boolean(options.root));
   const isOpened = resolveGroupOpened(tree, collapsedTrees, options);
   const hasChildren = hasTreeChildren(tree);
   const showHeader = Boolean(tree.name) && hasChildren;

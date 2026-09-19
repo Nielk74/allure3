@@ -3,6 +3,7 @@ import {
   applySubtreeToggleState,
   collectExpandableSubtreeNodes,
   getSubtreeToggleIcon,
+  getTreeGroupDefaultOpenedState,
   hasExpandableTreeChildren,
   resolveNextSubtreeToggleState,
   type SubtreeNodeState,
@@ -65,11 +66,6 @@ type FlattenVisibleTreeRowsOptions = {
   isOpened: (scopedId: string, openedByDefault: boolean) => boolean;
 };
 
-const isFailedOrBrokenNode = (statistic?: Statistic) =>
-  statistic === undefined || Boolean(statistic?.failed || statistic?.broken);
-
-const getDefaultOpenedState = (statistic?: Statistic, root = false) => root || isFailedOrBrokenNode(statistic);
-
 const isNodeOpened = (nodeId: string, collapsedTrees: Set<string>, defaultOpened: boolean) =>
   collapsedTrees.has(nodeId) ? !defaultOpened : defaultOpened;
 
@@ -123,7 +119,7 @@ export const flattenVisibleTreeRows = ({
       continue;
     }
 
-    const openedByDefault = getDefaultOpenedState(current.tree.statistic);
+    const openedByDefault = getTreeGroupDefaultOpenedState();
     const scopedId = toScopedId(current.tree.nodeId);
     const treeIsOpened = isOpened(scopedId, openedByDefault);
 
@@ -176,7 +172,7 @@ export const Tree: FunctionalComponent<TreeProps> = ({
 }) => {
   const rootNodeId = tree.nodeId as string;
   const toScopedId = (nodeId: string) => (focusIdPrefix ? `${focusIdPrefix}${nodeId}` : nodeId);
-  const defaultOpened = getDefaultOpenedState(statistic, Boolean(root));
+  const defaultOpened = getTreeGroupDefaultOpenedState(Boolean(root));
   const resolveIsOpened = (scopedId: string, openedByDefault: boolean) =>
     isGroupOpened ? isGroupOpened(scopedId, openedByDefault) : isNodeOpened(scopedId, collapsedTrees, openedByDefault);
   const rootScopedId = toScopedId(rootNodeId);

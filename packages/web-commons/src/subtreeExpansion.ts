@@ -9,10 +9,8 @@ export type ExpandableTreeNode = {
   leaves: unknown[];
 };
 
-const isFailedOrBrokenNode = (statistic?: Statistic) =>
-  statistic === undefined || Boolean(statistic?.failed || statistic?.broken);
-
-const getDefaultOpenedState = (statistic?: Statistic, root = false) => root || isFailedOrBrokenNode(statistic);
+/** Report hierarchy groups start closed. Only the invisible root container is open so first-level folders render. */
+export const getTreeGroupDefaultOpenedState = (root = false) => root;
 
 export const hasExpandableTreeChildren = (tree: ExpandableTreeNode) => tree.trees.length > 0 || tree.leaves.length > 0;
 
@@ -29,7 +27,7 @@ export const collectExpandableSubtreeNodes = (tree: ExpandableTreeNode): Subtree
 
     nodes.push({
       id: current.tree.nodeId,
-      openedByDefault: getDefaultOpenedState(current.tree.statistic),
+      openedByDefault: getTreeGroupDefaultOpenedState(),
       isRoot: current.isRoot,
     });
     current.tree.trees.forEach((nestedSubtree) => stack.push({ tree: nestedSubtree, isRoot: false }));

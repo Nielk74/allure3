@@ -25,25 +25,27 @@ describe("treeNavigation > flattenVisibleTree", () => {
     await label("component", "web-commons");
   });
 
-  test("includes group and leaves when group is expanded by default", () => {
+  test("collapses failed groups by default", () => {
     const flat = flattenVisibleTree({
       collapsedTrees: new Set(),
       tree: sampleTree,
       isRoot: true,
     });
 
-    expect(flat.map((node) => node.id)).toEqual(["group-a", "leaf-1", "leaf-2"]);
+    expect(flat.map((node) => node.id)).toEqual(["group-a"]);
+    expect(flat[0]).toMatchObject({ isExpanded: false, openedByDefault: false });
   });
 
-  test("hides leaves when group is collapsed", () => {
+  test("includes leaves when a default-collapsed group is expanded for the current session", () => {
     const flat = flattenVisibleTree({
-      collapsedTrees: new Set(["group-a"]),
+      collapsedTrees: new Set(),
       tree: sampleTree,
       isRoot: true,
+      isGroupOpened: (id, openedByDefault) => id === "group-a" || openedByDefault,
     });
 
-    expect(flat.map((node) => node.id)).toEqual(["group-a"]);
-    expect(flat[0]?.isExpanded).toBe(false);
+    expect(flat.map((node) => node.id)).toEqual(["group-a", "leaf-1", "leaf-2"]);
+    expect(flat[0]?.isExpanded).toBe(true);
   });
 
   test("includes env section nodes when provided", () => {
@@ -142,7 +144,7 @@ describe("treeNavigation > flattenVisibleTree", () => {
       isRoot: true,
     });
 
-    expect(flat[0]?.openedByDefault).toBe(true);
+    expect(flat[0]?.openedByDefault).toBe(false);
 
     const passedGroupTree: FlattenTreeInput = {
       nodeId: "passed-suite",
@@ -161,17 +163,24 @@ describe("treeNavigation > flattenVisibleTree", () => {
     expect(passedFlat[0]?.openedByDefault).toBe(false);
   });
 
-  test("collapses groups per environment when nodeId is shared", () => {
-    const envTree = {
+  test("tracks session expansion per environment when nodeId is shared", () => {
+    const sharedSuite = {
       nodeId: "shared-suite",
       name: "Shared suite",
       statistic: { total: 1, passed: 1 },
       leaves: [{ nodeId: "leaf" }],
       trees: [],
     };
+    const envTree = {
+      nodeId: "root",
+      statistic: { total: 1, passed: 1 },
+      leaves: [],
+      trees: [sharedSuite],
+    };
 
     const flat = flattenVisibleTree({
-      collapsedTrees: new Set(["default:shared-suite"]),
+      collapsedTrees: new Set(),
+      isGroupOpened: (id, openedByDefault) => id === "foo:shared-suite" || openedByDefault,
       envSections: [
         {
           id: "default",
@@ -191,8 +200,8 @@ describe("treeNavigation > flattenVisibleTree", () => {
     const defaultGroup = flat.find((node) => node.id === "default:shared-suite");
     const fooGroup = flat.find((node) => node.id === "foo:shared-suite");
 
-    expect(defaultGroup?.isExpanded).toBe(false);
-    expect(fooGroup?.isExpanded).toBe(true);
+    expect(defaultGroup).toMatchObject({ isExpanded: false, openedByDefault: false });
+    expect(fooGroup).toMatchObject({ isExpanded: true, openedByDefault: false });
     expect(flat.some((node) => node.id === "default:leaf")).toBe(false);
     expect(flat.some((node) => node.id === "foo:leaf")).toBe(true);
   });

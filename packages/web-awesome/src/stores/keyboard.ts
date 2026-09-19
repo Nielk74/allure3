@@ -1,5 +1,6 @@
 import {
   flattenVisibleTree,
+  getTreeGroupDefaultOpenedState,
   moveFocus,
   router,
   type FlatTreeNode,
@@ -306,7 +307,7 @@ const expandPathToLeaf = (tree: RecursiveTree, targetNodeId: string, prefix: str
   for (const sub of tree.trees) {
     if (expandPathToLeaf(sub, targetNodeId, prefix)) {
       const scopedId = prefix ? `${prefix}${sub.nodeId}` : sub.nodeId;
-      const openedByDefault = !sub.statistic || Boolean(sub.statistic.failed || sub.statistic.broken);
+      const openedByDefault = getTreeGroupDefaultOpenedState();
       const isOpen = openedByDefault ? !collapsedTrees.peek().has(scopedId) : expandedTrees.peek().has(scopedId);
 
       if (!isOpen) {

@@ -23,7 +23,11 @@ describe("subtreeExpansion", () => {
   });
 
   test("collects root and nested groups", () => {
-    expect(collectExpandableSubtreeNodes(sampleTree).map((node) => node.id)).toEqual(["root", "child", "grand"]);
+    expect(collectExpandableSubtreeNodes(sampleTree)).toEqual([
+      { id: "root", openedByDefault: false, isRoot: true },
+      { id: "child", openedByDefault: false, isRoot: false },
+      { id: "grand", openedByDefault: false, isRoot: false },
+    ]);
   });
 
   test("apply none collapses every group in subtree", () => {

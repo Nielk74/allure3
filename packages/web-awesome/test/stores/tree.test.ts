@@ -12,17 +12,23 @@ beforeEach(async () => {
 });
 
 describe("stores > tree", () => {
-  it("keeps positive expansion state in memory and clears legacy persisted state", async () => {
+  it("keeps positive expansion state only for the current page session", async () => {
     localStorage.setItem("expandedTrees", JSON.stringify(["persisted-suite"]));
 
-    const { expandedTrees, toggleTree } = await import("../../src/stores/tree.js");
+    const firstSession = await import("../../src/stores/tree.js");
 
-    expect(expandedTrees.value).toEqual(new Set());
+    expect(firstSession.expandedTrees.value).toEqual(new Set());
     expect(localStorage.getItem("expandedTrees")).toBeNull();
 
-    toggleTree("current-suite", false);
+    firstSession.toggleTree("current-suite", false);
 
-    expect(expandedTrees.value).toEqual(new Set(["current-suite"]));
+    expect(firstSession.expandedTrees.value).toEqual(new Set(["current-suite"]));
     expect(localStorage.getItem("expandedTrees")).toBeNull();
+
+    vi.resetModules();
+    const reloadedSession = await import("../../src/stores/tree.js");
+
+    expect(reloadedSession.expandedTrees.value).toEqual(new Set());
+    expect(reloadedSession.isTreeOpened("current-suite", false)).toBe(false);
   });
 });

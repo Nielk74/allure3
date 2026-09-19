@@ -91,6 +91,23 @@ describe("flattenVisibleTreeRows", () => {
       { kind: "group", id: "env:group-1", depth: 0 },
     ]);
   });
+
+  it.each(["failed", "broken"] as const)("keeps %s groups collapsed until the user opens them", (status) => {
+    const tree = makeTree(1);
+    tree.trees[0]!.statistic = { ...emptyStatistic(), [status]: 1, total: 1 };
+    const observedDefaults: boolean[] = [];
+    const rows = flattenVisibleTreeRows({
+      tree,
+      toScopedId: (id) => id,
+      isOpened: (_id, openedByDefault) => {
+        observedDefaults.push(openedByDefault);
+        return openedByDefault;
+      },
+    });
+
+    expect(observedDefaults).toEqual([false]);
+    expect(rows.map((row) => row.scopedId)).toEqual(["group-0"]);
+  });
 });
 
 describe("Tree row virtualization", () => {

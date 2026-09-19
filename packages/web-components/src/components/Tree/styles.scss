@@ -124,11 +124,23 @@
   align-items: flex-start;
 }
 
-.tree-content:not(.root) {
+.tree-content {
   display: block;
-  padding-left: 24px;
-  margin-bottom: 12px;
+}
+
+.tree-row {
+  position: relative;
+  box-sizing: border-box;
+  height: 32px;
   border-top: 1px solid var(--color-border-subtle);
+
+  > .tree-section {
+    height: 32px;
+  }
+}
+
+.tree-content-marker {
+  display: none;
 }
 
 .tree-item-icon {

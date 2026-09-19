@@ -25,14 +25,18 @@ export const noTests = computed(() => {
 });
 
 export const collapsedTrees = signal(new Set(loadFromLocalStorage<string[]>("collapsedTrees", [])));
-export const expandedTrees = signal(new Set(loadFromLocalStorage<string[]>("expandedTrees", [])));
+export const expandedTrees = signal(new Set<string>());
+
+// Expansion is working context for the current report, not a durable preference. Remove values written by older
+// versions so a previously opened large suite cannot make a later report expensive to load.
+try {
+  localStorage.removeItem("expandedTrees");
+} catch {
+  // Storage can be unavailable in restricted browser contexts. The in-memory state still works in that case.
+}
 
 effect(() => {
   localStorage.setItem("collapsedTrees", JSON.stringify([...collapsedTrees.value]));
-});
-
-effect(() => {
-  localStorage.setItem("expandedTrees", JSON.stringify([...expandedTrees.value]));
 });
 
 export const isTreeOpened = (id: string, openedByDefault = true): boolean => {

@@ -1,8 +1,7 @@
-import type { FunctionalComponent } from "preact";
+import type { ComponentChild, FunctionalComponent } from "preact";
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 
-import type { TreeLeaf } from "../../../global";
-import { TreeItem } from "./TreeItem";
+import type { TreeRow } from "./Tree";
 
 const ROW_HEIGHT = 32;
 const OVERSCAN_ROWS = 12;
@@ -48,30 +47,25 @@ export const calculateVirtualRange = ({
   return { start, end };
 };
 
-type VirtualizedTreeLeavesProps = {
-  leaves: TreeLeaf[];
-  routeId?: string;
-  focusedId?: string;
-  toScopedId: (nodeId: string) => string;
-  navigateTo: (id: string) => void;
+type VirtualizedTreeRowsProps = {
+  rows: TreeRow[];
+  activeIndex: number;
+  activePosition?: string;
+  leafCount: number;
+  renderRow: (row: TreeRow) => ComponentChild;
 };
 
-export const VirtualizedTreeLeaves: FunctionalComponent<VirtualizedTreeLeavesProps> = ({
-  leaves,
-  routeId,
-  focusedId,
-  toScopedId,
-  navigateTo,
+export const VirtualizedTreeRows: FunctionalComponent<VirtualizedTreeRowsProps> = ({
+  rows,
+  activeIndex,
+  activePosition,
+  leafCount,
+  renderRow,
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
-  const activeId = focusedId ?? routeId;
-  const activeIndex = leaves.findIndex((leaf) => {
-    return focusedId ? toScopedId(leaf.nodeId) === focusedId : leaf.nodeId === routeId;
-  });
-  const activePosition = activeIndex >= 0 ? `${activeId}:${activeIndex}` : undefined;
   const [virtualWindow, setVirtualWindow] = useState<VirtualWindow>(() => ({
     ...calculateVirtualRange({
-      itemCount: leaves.length,
+      itemCount: rows.length,
       listOffset: 0,
       scrollTop: 0,
       viewportHeight: INITIAL_VIEWPORT_HEIGHT,
@@ -80,16 +74,20 @@ export const VirtualizedTreeLeaves: FunctionalComponent<VirtualizedTreeLeavesPro
     activePosition,
   }));
   const shouldRevealActive = activeIndex >= 0 && activePosition !== virtualWindow.activePosition;
+  const clampedWindow = {
+    start: Math.min(rows.length, virtualWindow.start),
+    end: Math.min(rows.length, Math.max(virtualWindow.start, virtualWindow.end)),
+  };
   const renderRange =
-    shouldRevealActive && (activeIndex < virtualWindow.start || activeIndex >= virtualWindow.end)
+    shouldRevealActive && (activeIndex < clampedWindow.start || activeIndex >= clampedWindow.end)
       ? calculateVirtualRange({
-          itemCount: leaves.length,
+          itemCount: rows.length,
           listOffset: activeIndex * ROW_HEIGHT,
           scrollTop: activeIndex * ROW_HEIGHT,
           viewportHeight: ROW_HEIGHT,
           activeIndex,
         })
-      : virtualWindow;
+      : clampedWindow;
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -108,7 +106,7 @@ export const VirtualizedTreeLeaves: FunctionalComponent<VirtualizedTreeLeavesPro
       setVirtualWindow((current) => {
         const activeIndexToReveal = revealActive && current.activePosition !== activePosition ? activeIndex : -1;
         const nextRange = calculateVirtualRange({
-          itemCount: leaves.length,
+          itemCount: rows.length,
           listOffset,
           scrollTop: scrollContainer.scrollTop,
           viewportHeight: scrollContainer.clientHeight || INITIAL_VIEWPORT_HEIGHT,
@@ -136,6 +134,7 @@ export const VirtualizedTreeLeaves: FunctionalComponent<VirtualizedTreeLeavesPro
 
     const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(scheduleUpdate);
     resizeObserver?.observe(scrollContainer);
+    resizeObserver?.observe(list);
 
     return () => {
       if (animationFrame !== undefined) {
@@ -146,35 +145,15 @@ export const VirtualizedTreeLeaves: FunctionalComponent<VirtualizedTreeLeavesPro
       scrollContainer.removeEventListener("scroll", scheduleUpdate);
       window.removeEventListener("resize", scheduleUpdate);
     };
-  }, [activeIndex, activePosition, leaves.length]);
+  }, [activeIndex, activePosition, rows.length]);
 
-  const visibleLeaves = leaves.slice(renderRange.start, renderRange.end);
+  const visibleRows = rows.slice(renderRange.start, renderRange.end);
 
   return (
-    <div ref={listRef} data-testid="tree-virtual-list" data-item-count={leaves.length}>
+    <div ref={listRef} data-testid="tree-virtual-list" data-item-count={rows.length} data-leaf-count={leafCount}>
       <div aria-hidden="true" style={{ height: `${renderRange.start * ROW_HEIGHT}px` }} />
-      {visibleLeaves.map((leaf) => (
-        <TreeItem
-          data-testid="tree-leaf"
-          key={leaf.nodeId}
-          id={leaf.nodeId}
-          name={leaf.name}
-          status={leaf.status}
-          groupOrder={leaf.groupOrder as number}
-          duration={leaf.duration}
-          retriesCount={leaf.retriesCount}
-          resolution={leaf.resolution}
-          transition={leaf.transition}
-          transitionTooltip={leaf.transitionTooltip}
-          tooltips={leaf.tooltips}
-          flaky={leaf.flaky}
-          marked={leaf.nodeId === routeId}
-          focused={toScopedId(leaf.nodeId) === focusedId}
-          focusNodeId={toScopedId(leaf.nodeId)}
-          navigateTo={navigateTo}
-        />
-      ))}
-      <div aria-hidden="true" style={{ height: `${(leaves.length - renderRange.end) * ROW_HEIGHT}px` }} />
+      {visibleRows.map(renderRow)}
+      <div aria-hidden="true" style={{ height: `${(rows.length - renderRange.end) * ROW_HEIGHT}px` }} />
     </div>
   );
 };
